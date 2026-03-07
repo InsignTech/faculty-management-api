@@ -1,0 +1,28 @@
+const helmet = require('helmet');
+const cors = require('cors');
+const hpp = require('hpp');
+const rateLimit = require('express-rate-limit');
+
+const setupSecurity = (app) => {
+    // Helmet for security headers
+    app.use(helmet());
+
+    // CORS configuration
+    app.use(cors());
+
+    // Prevent HTTP Parameter Pollution
+    app.use(hpp());
+
+    // Rate limiting
+    const limiter = rateLimit({
+        windowMs: 15 * 60 * 1000, // 15 minutes
+        max: 100, // limit each IP to 100 requests per windowMs
+        message: {
+            success: false,
+            message: 'Too many requests from this IP, please try again after 15 minutes',
+        },
+    });
+    app.use('/api/', limiter);
+};
+
+module.exports = setupSecurity;
