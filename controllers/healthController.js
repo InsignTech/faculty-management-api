@@ -19,8 +19,7 @@ const getHealth = async (req, res) => {
 
     } catch (error) {
         healthData.error = error.message;
-
-        return sendResponse(res, 500, 'API is unhealthy', healthData);
+        next(new ErrorResponse('API is unhealthy', 500, 'HEALTH_CHECK_FAILED'));
     }
 };
 
