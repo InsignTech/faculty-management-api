@@ -124,22 +124,20 @@ DELIMITER ;
 -- Employee Table
 CREATE TABLE IF NOT EXISTS employee (
     employee_id INT AUTO_INCREMENT PRIMARY KEY,
-    user_id INT,
-    employee_code VARCHAR(50) UNIQUE NOT NULL,
-    full_name VARCHAR(255) NOT NULL,
-    department_id INT,
-    employment_type VARCHAR(50),
-    manager_id INT NULL,
-    join_date DATE,
-    yoe INT,
-    role VARCHAR(50),
+    organization_id INT,
+    employee_code VARCHAR(45) UNIQUE NOT NULL,
+    employee_name VARCHAR(200) NOT NULL,
+    role_id INT,
     designation_id INT,
-    location VARCHAR(255),
-    contact_number VARCHAR(20),
-    avatar_url VARCHAR(255),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_id) REFERENCES user_accounts(id),
+    employee_type VARCHAR(45),
+    reporting_manager_id INT NULL,
+    joining_date DATE,
+    active TINYINT DEFAULT 1,
+    created_on DATETIME DEFAULT CURRENT_TIMESTAMP,
+    created_by VARCHAR(45),
+    modified_on DATETIME ON UPDATE CURRENT_TIMESTAMP,
+    modified_by VARCHAR(45),
+    department_id INT,
     FOREIGN KEY (department_id) REFERENCES department(department_id)
 );
 
@@ -177,15 +175,25 @@ DELIMITER ;
 
 -- Stored Procedure: Get All Employees
 DELIMITER $$
-CREATE PROCEDURE sp_get_employees()
+CREATE PROCEDURE sp_get_employees(
+    IN p_search_term VARCHAR(255),
+    IN p_role_id INT
+)
 BEGIN
     SELECT 
         e.*,
         u.email,
-        d.departmentname
+        d.departmentname,
+        r.role_name,
+        des.designation_name
     FROM employee e
     LEFT JOIN user_accounts u ON e.user_id = u.id
     LEFT JOIN department d ON e.department_id = d.department_id
+    LEFT JOIN role r ON e.role_id = r.role_id
+    LEFT JOIN designation des ON e.designation_id = des.designation_id
+    WHERE 
+        (p_search_term IS NULL OR p_search_term = '' OR e.employee_name LIKE CONCAT('%', p_search_term, '%') OR e.employee_code LIKE CONCAT('%', p_search_term, '%'))
+        AND (p_role_id IS NULL OR p_role_id = 0 OR e.role_id = p_role_id)
     ORDER BY e.employee_id DESC;
 END $$
 DELIMITER ;

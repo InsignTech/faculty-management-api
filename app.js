@@ -9,6 +9,7 @@ const employeeRoutes = require('./routes/employeeRoutes');
 const roleRoutes = require('./routes/roleRoutes');
 const settingsRoutes = require('./routes/settingsRoutes');
 const privilageRoutes = require('./routes/privilageRoutes');
+const designationRoutes = require('./routes/designationRoutes');
 const setupSwagger = require('./utils/swagger');
 
 const app = express();
@@ -35,6 +36,7 @@ app.use('/api/employees', employeeRoutes);
 app.use('/api/roles', roleRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/privileges', privilageRoutes);
+app.use('/api/designations', designationRoutes);
 
 // 404 handler for undefined routes
 app.use((req, res, next) => {

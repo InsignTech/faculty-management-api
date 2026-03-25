@@ -13,8 +13,27 @@ const createEmployee = async (req, res, next) => {
 
 const getEmployees = async (req, res, next) => {
   try {
+    const { search, role } = req.query;
+    if (search || role) {
+      const employees = await EmployeeModel.getFiltered(search, role);
+      return sendResponse(res, 200, 'Employees fetched successfully', employees);
+    }
     const employees = await EmployeeModel.getAll();
     sendResponse(res, 200, 'Employees fetched successfully', employees);
+  } catch (error) {
+    next(error);
+  }
+};
+
+const getPotentialManagers = async (req, res, next) => {
+  try {
+    const { search, department, excludeId } = req.query;
+    const managers = await EmployeeModel.getPotentialManagers(
+      search || '',
+      department || 0,
+      excludeId || 0
+    );
+    sendResponse(res, 200, 'Potential managers fetched successfully', managers);
   } catch (error) {
     next(error);
   }
@@ -56,6 +75,7 @@ const deleteEmployee = async (req, res, next) => {
 module.exports = {
   createEmployee,
   getEmployees,
+  getPotentialManagers,
   getEmployeeById,
   updateEmployee,
   deleteEmployee,
