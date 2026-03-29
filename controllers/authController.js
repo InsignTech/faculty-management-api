@@ -75,8 +75,7 @@ const requestOTP = async (req, res, next) => {
 
         const user = await UserModel.findByEmail(email);
         if (!user) {
-            // Return success even if not found to prevent email enumeration
-            return sendResponse(res, 200, 'If an account exists, an OTP will be sent to the email address.');
+            return next(new ErrorResponse('The provided email is not registered.', 404, 'NOT_FOUND'));
         }
 
         // Generate 6-digit OTP
@@ -91,7 +90,7 @@ const requestOTP = async (req, res, next) => {
             console.error(`Failed to send OTP email to ${email}:`, emailErr.message);
         }
 
-        sendResponse(res, 200, 'If an account exists, an OTP will be sent to the email address.');
+        sendResponse(res, 200, 'A password reset OTP has been sent to your email.');
     } catch (error) {
         next(error);
     }
