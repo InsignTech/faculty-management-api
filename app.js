@@ -11,6 +11,7 @@ const settingsRoutes = require('./routes/settingsRoutes');
 const privilageRoutes = require('./routes/privilageRoutes');
 const designationRoutes = require('./routes/designationRoutes');
 const leavePolicyRoutes = require('./routes/leavePolicyRoutes');
+const leaveRequestRoutes = require('./routes/leaveRequestRoutes');
 const setupSwagger = require('./utils/swagger');
 
 const app = express();
@@ -39,6 +40,7 @@ app.use('/api/settings', settingsRoutes);
 app.use('/api/privileges', privilageRoutes);
 app.use('/api/designations', designationRoutes);
 app.use('/api/leave-policies', leavePolicyRoutes);
+app.use('/api/leave-requests', leaveRequestRoutes);
 
 // 404 handler for undefined routes
 app.use((req, res, next) => {
