@@ -1,12 +1,6 @@
 const jwt = require('jsonwebtoken');
 
 const protect = (req, res, next) => {
-    // For testing purposes: allow access without token
-    // req.user = { id: 1, role: 'Admin' }; // Mock admin user
-    // return next();
-
-    // Original logic (commented out as requested)
-    /*
     let token;
     if (
         req.headers.authorization &&
@@ -34,19 +28,10 @@ const protect = (req, res, next) => {
             errorCode: 'INVALID_TOKEN',
         });
     }
-    */
-
-    // TEMPORARY: Allow all and mock Admin
-    req.user = { id: 1, role: 'Admin' };
-    next();
 };
 
 const authorize = (...roles) => {
     return (req, res, next) => {
-        // TEMPORARY: Allow all roles
-        return next();
-
-        /*
         if (!roles.includes(req.user.role)) {
             return res.status(403).json({
                 success: false,
@@ -55,7 +40,6 @@ const authorize = (...roles) => {
             });
         }
         next();
-        */
     };
 };
 

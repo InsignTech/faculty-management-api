@@ -146,7 +146,7 @@ DELIMITER $$
 CREATE PROCEDURE sp_create_employee(
     IN p_user_id INT,
     IN p_employee_code VARCHAR(50),
-    IN p_full_name VARCHAR(255),
+    IN p_employee_name VARCHAR(255),
     IN p_department_id INT,
     IN p_employment_type VARCHAR(50),
     IN p_manager_id INT,
@@ -237,7 +237,7 @@ BEGIN
     UPDATE employee SET
         user_id = p_user_id,
         employee_code = p_employee_code,
-        full_name = p_full_name,
+        employee_name = p_employee_name,
         department_id = p_department_id,
         employment_type = p_employment_type,
         manager_id = p_manager_id,

@@ -19,10 +19,10 @@ BEGIN
     FROM employee e
     LEFT JOIN user_accounts u ON e.user_id = u.id
     LEFT JOIN department d ON e.department_id = d.department_id
-    LEFT JOIN app_role r ON e.role = r.role_id
+    LEFT JOIN app_role r ON e.role_id = r.role_id
     WHERE 
-        (p_search_term IS NULL OR p_search_term = '' OR e.full_name LIKE CONCAT('%', p_search_term, '%') OR e.employee_code LIKE CONCAT('%', p_search_term, '%'))
-        AND (p_role_id IS NULL OR p_role_id = 0 OR e.role = p_role_id)
+        (p_search_term IS NULL OR p_search_term = '' OR e.employee_name LIKE CONCAT('%', p_search_term, '%') OR e.employee_code LIKE CONCAT('%', p_search_term, '%'))
+        AND (p_role_id IS NULL OR p_role_id = 0 OR e.role_id = p_role_id)
     ORDER BY e.employee_id DESC;
 END //
 
@@ -36,16 +36,16 @@ CREATE PROCEDURE `sp_get_potential_managers`(
 BEGIN
     SELECT 
         e.employee_id,
-        e.full_name AS name,
+        e.employee_name AS name,
         d.departmentname AS dept,
         e.department_id
     FROM employee e
     LEFT JOIN department d ON e.department_id = d.department_id
     WHERE 
         e.employee_id != p_exclude_employee_id -- Can't be own manager
-        AND (p_search_term IS NULL OR p_search_term = '' OR e.full_name LIKE CONCAT('%', p_search_term, '%'))
+        AND (p_search_term IS NULL OR p_search_term = '' OR e.employee_name LIKE CONCAT('%', p_search_term, '%'))
         AND (p_department_id IS NULL OR p_department_id = 0 OR e.department_id = p_department_id)
-    ORDER BY e.full_name ASC;
+    ORDER BY e.employee_name ASC;
 END //
 
 DELIMITER ;

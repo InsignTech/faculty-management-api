@@ -1,12 +1,52 @@
+const bcrypt = require('bcryptjs');
 const EmployeeModel = require('../models/employeeModel');
+const UserModel = require('../models/userModel');
 const { sendResponse } = require('../utils/responseHelper');
 const ErrorResponse = require('../utils/errorResponse');
+const { sendWelcomeEmail } = require('../utils/emailService');
 
 const createEmployee = async (req, res, next) => {
   try {
+    const { email, employee_name, role_id, employee_code } = req.body;
+    
+    // 1. Mandatory Validation
+    if (!email || !employee_code || !employee_name) {
+        return next(new ErrorResponse('Email, Employee Name and Code are mandatory!', 400, 'VALIDATION_ERROR'));
+    }
+
+    // First create the employee record
     const result = await EmployeeModel.create(req.body);
-    sendResponse(res, 201, 'Employee created successfully', result);
+    
+    if (result && result.employee_id) {
+        // Generate a random temporary password
+        const tempPassword = Math.random().toString(36).slice(-8);
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash(tempPassword, salt);
+        
+        // Create user account linked to this employee
+        await UserModel.signup(
+            employee_name, 
+            email, 
+            hashedPassword, 
+            role_id || 1, 
+            result.employee_id
+        );
+        
+        // Send welcome email with credentials
+        try {
+            await sendWelcomeEmail({ toEmail: email, employeeName: employee_name, tempPassword });
+            console.log(`Welcome email sent to: ${email}`);
+        } catch (emailErr) {
+            console.error(`Failed to send welcome email to ${email}:`, emailErr.message);
+        }
+    }
+
+    sendResponse(res, 201, 'Employee created successfully with user account', result);
   } catch (error) {
+    // Check for MySQL duplicate key error (ER_DUP_ENTRY)
+    if (error.code === 'ER_SIGNAL_NOT_FOUND' || error.sqlState === '45000') {
+        return next(new ErrorResponse(error.message, 409, 'CONFLICT'));
+    }
     next(error);
   }
 };

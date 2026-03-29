@@ -3,11 +3,12 @@ const pool = require('../config/db');
 class EmployeeModel {
   static async create(data) {
     const [rows] = await pool.execute(
-      'CALL sp_create_employee(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'CALL sp_create_employee(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       [
         data.organization_id || 1,
         data.employee_code || '',
         data.employee_name || '',
+        data.email || '',
         data.employee_role || 0,
         data.designation_id || 0,
         data.employee_type || '',
@@ -50,12 +51,13 @@ class EmployeeModel {
 
   static async update(id, data) {
     const [rows] = await pool.execute(
-      'CALL sp_update_employee(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'CALL sp_update_employee(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       [
         id,
         data.organization_id || 1,
         data.employee_code || '',
         data.employee_name || '',
+        data.email || '',
         data.employee_role || 0,
         data.designation_id || 0,
         data.employee_type || '',
