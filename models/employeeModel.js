@@ -11,12 +11,12 @@ class EmployeeModel {
         data.email || '',
         data.employee_role || 0,
         data.designation_id || 0,
-        data.employee_type || '',
         data.reporting_manager_id || null,
         data.joining_date || null,
         data.active !== undefined ? data.active : 1,
         data.created_by || 'admin',
-        data.department_id || 0
+        data.department_id || 0,
+        data.basic_pay || 0.00
       ]
     );
     return rows[0][0];
@@ -60,12 +60,12 @@ class EmployeeModel {
         data.email || '',
         data.employee_role || 0,
         data.designation_id || 0,
-        data.employee_type || '',
         data.reporting_manager_id || null,
         data.joining_date || null,
         data.active !== undefined ? data.active : 1,
         data.modified_by || 'admin',
-        data.department_id || 0
+        data.department_id || 0,
+        data.basic_pay || 0.00
       ]
     );
     return rows[0][0];

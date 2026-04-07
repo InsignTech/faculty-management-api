@@ -96,6 +96,34 @@ const saveDesignationPolicy = async (req, res, next) => {
   }
 };
 
+// --- Role Level ---
+
+const getRolePolicy = async (req, res, next) => {
+  try {
+    const policy = await LeavePolicyModel.getRolePolicy(req.params.id);
+    sendResponse(res, 200, 'Role policy fetched successfully', policy || null);
+  } catch (error) {
+    next(error);
+  }
+};
+
+const saveRolePolicy = async (req, res, next) => {
+  try {
+    const { leave_policy_id, role_id, policy_value, weekly_off } = req.body;
+    const created_by = req.user ? req.user.username : 'admin';
+    await LeavePolicyModel.saveRolePolicy({
+      leave_policy_id,
+      role_id,
+      policy_value,
+      weekly_off,
+      created_by
+    });
+    sendResponse(res, 201, 'Role policy saved successfully');
+  } catch (error) {
+    next(error);
+  }
+};
+
 // --- Employee Level ---
 
 const getEmployeePolicy = async (req, res, next) => {
@@ -131,6 +159,8 @@ module.exports = {
   deleteSystemPolicy,
   getDesignationPolicy,
   saveDesignationPolicy,
+  getRolePolicy,
+  saveRolePolicy,
   getEmployeePolicy,
   saveEmployeePolicy
 };

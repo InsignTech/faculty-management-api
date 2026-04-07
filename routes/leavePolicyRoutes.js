@@ -8,6 +8,8 @@ const {
   deleteSystemPolicy,
   getDesignationPolicy,
   saveDesignationPolicy,
+  getRolePolicy,
+  saveRolePolicy,
   getEmployeePolicy,
   saveEmployeePolicy
 } = require('../controllers/leavePolicyController');
@@ -22,6 +24,10 @@ router.delete('/system/:id', deleteSystemPolicy);
 // Designation Level
 router.get('/designation/:id', getDesignationPolicy);
 router.post('/designation', saveDesignationPolicy);
+
+// Role Level
+router.get('/role/:id', getRolePolicy);
+router.post('/role', saveRolePolicy);
 
 // Employee Level
 router.get('/employee/:id', getEmployeePolicy);

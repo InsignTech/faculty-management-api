@@ -12,6 +12,9 @@ const privilageRoutes = require('./routes/privilageRoutes');
 const designationRoutes = require('./routes/designationRoutes');
 const leavePolicyRoutes = require('./routes/leavePolicyRoutes');
 const leaveRequestRoutes = require('./routes/leaveRequestRoutes');
+const attendanceRoutes = require('./routes/attendanceRoutes');
+const holidayRoutes = require('./routes/holidayRoutes');
+const leaveEncashmentRoutes = require('./routes/leaveEncashmentRoutes');
 const setupSwagger = require('./utils/swagger');
 
 const app = express();
@@ -41,6 +44,9 @@ app.use('/api/privileges', privilageRoutes);
 app.use('/api/designations', designationRoutes);
 app.use('/api/leave-policies', leavePolicyRoutes);
 app.use('/api/leave-requests', leaveRequestRoutes);
+app.use('/api/attendance', attendanceRoutes);
+app.use('/api/holidays', holidayRoutes);
+app.use('/api/leave-encashments', leaveEncashmentRoutes);
 
 // 404 handler for undefined routes
 app.use((req, res, next) => {

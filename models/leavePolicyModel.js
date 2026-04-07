@@ -66,6 +66,33 @@ class LeavePolicyModel {
     return rows[0][0];
   }
 
+  // --- Role Level ---
+  static async getRolePolicy(roleId) {
+    const [rows] = await pool.execute('CALL sp_get_role_policy(?)', [roleId]);
+    const policy = rows[0][0];
+    if (policy && policy.policy_value) {
+      policy.policy_value = JSON.parse(policy.policy_value);
+    }
+    if (policy && policy.weekly_off) {
+      policy.weekly_off = JSON.parse(policy.weekly_off);
+    }
+    return policy;
+  }
+
+  static async saveRolePolicy(data) {
+    const [rows] = await pool.execute(
+      'CALL sp_save_role_policy(?, ?, ?, ?, ?)',
+      [
+        data.leave_policy_id,
+        data.role_id,
+        JSON.stringify(data.policy_value),
+        JSON.stringify(data.weekly_off || ["Sunday"]),
+        data.created_by || 'admin'
+      ]
+    );
+    return rows[0][0];
+  }
+
   // --- Employee Level ---
   static async getEmployeePolicy(employeeId) {
     const [rows] = await pool.execute('CALL sp_get_employee_policy(?)', [employeeId]);

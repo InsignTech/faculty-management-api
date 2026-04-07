@@ -29,7 +29,6 @@ const protect = (req, res, next) => {
         });
     }
 };
-
 const authorize = (...roles) => {
     return (req, res, next) => {
         if (!roles.includes(req.user.role)) {
@@ -43,4 +42,20 @@ const authorize = (...roles) => {
     };
 };
 
-module.exports = { protect, authorize };
+const protectMachine = (req, res, next) => {
+    const machineKey = req.headers['x-api-key'];
+    const VALID_KEY = process.env.MACHINE_API_KEY || 'SD-MACHINE-SECURE-KEY-2024';
+
+    if (!machineKey || machineKey !== VALID_KEY) {
+        return res.status(401).json({
+            success: false,
+            message: 'Invalid or missing Machine API Key',
+            errorCode: 'UNAUTHORIZED_MACHINE',
+        });
+    }
+
+    req.user = { role: 'Admin', employeeId: 0, name: 'Machine_Link' };
+    next();
+};
+
+module.exports = { protect, authorize, protectMachine };
