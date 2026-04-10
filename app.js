@@ -16,26 +16,33 @@ const attendanceRoutes = require('./routes/attendanceRoutes');
 const holidayRoutes = require('./routes/holidayRoutes');
 const leaveEncashmentRoutes = require('./routes/leaveEncashmentRoutes');
 const setupSwagger = require('./utils/swagger');
+const debugLog = require('./utils/debugLogger');
 
+debugLog("Step 4: Creating Express app...");
 const app = express();
 
 // Trust proxy - needed for express-rate-limit on hosted environments
 app.set('trust proxy', 1);
 
+debugLog("Step 5: Setting up middleware...");
 // Body parser
 app.use(express.json());
+
 
 // Dev logging middleware
 if (process.env.NODE_ENV === 'development') {
     app.use(morgan('dev'));
 }
 
+debugLog("Step 6: Setting up security...");
 // Setup Security Middlewares
 setupSecurity(app);
 
+debugLog("Step 7: Setting up Swagger...");
 // Setup Swagger
 setupSwagger(app);
 
+debugLog("Step 8: Mounting routes...");
 // Mount routers
 app.use('/api/health', healthRoutes);
 app.use('/api/auth', authRoutes);
@@ -60,7 +67,9 @@ app.use((req, res, next) => {
     });
 });
 
+debugLog("Step 9: Setting up global error handler...");
 // Error handler (must be last)
 app.use(errorHandler);
 
+debugLog("Step 10: App ready to export.");
 module.exports = app;
