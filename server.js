@@ -2,6 +2,8 @@ const app = require('./app');
 const pool = require('./config/db');
 require('dotenv').config();
 
+console.log("🔥 NEW DEPLOY -", new Date().toISOString());
+
 const PORT = process.env.PORT || 5000;
 
 const startServer = async () => {
