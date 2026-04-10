@@ -19,6 +19,9 @@ const setupSwagger = require('./utils/swagger');
 
 const app = express();
 
+// Trust proxy - needed for express-rate-limit on hosted environments
+app.set('trust proxy', 1);
+
 // Body parser
 app.use(express.json());
 
