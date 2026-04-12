@@ -68,7 +68,7 @@ class EmployeeModel {
     return rows;
   }
 
-  static async getFiltered(searchTerm = '', roleId = 0, limit = 10, offset = 0) {
+  static async getFiltered(searchTerm = '', roleId = 0, limit = 10, offset = 0, managerId = 0) {
     const query = `
       SELECT 
           e.*,
@@ -86,26 +86,36 @@ class EmployeeModel {
       WHERE 
           (? = '' OR e.employee_name LIKE CONCAT('%', ?, '%') OR e.employee_code LIKE CONCAT('%', ?, '%'))
           AND (? = 0 OR e.role_id = ?)
+          AND (? = 0 OR e.reporting_manager_id = ?)
       ORDER BY e.employee_id DESC
       LIMIT ? OFFSET ?
     `;
     const term = searchTerm || '';
     const rId = roleId || 0;
-    const [rows] = await pool.execute(query, [term, term, term, rId, rId, limit.toString(), offset.toString()]);
+    const mId = managerId || 0;
+    const [rows] = await pool.execute(query, [
+        term, term, term, 
+        rId, rId, 
+        mId, mId,
+        limit.toString(), 
+        offset.toString()
+    ]);
     return rows;
   }
 
-  static async getTotalCount(searchTerm = '', roleId = 0) {
+  static async getTotalCount(searchTerm = '', roleId = 0, managerId = 0) {
     const query = `
       SELECT COUNT(*) as total
       FROM employee e
       WHERE 
           (? = '' OR e.employee_name LIKE CONCAT('%', ?, '%') OR e.employee_code LIKE CONCAT('%', ?, '%'))
           AND (? = 0 OR e.role_id = ?)
+          AND (? = 0 OR e.reporting_manager_id = ?)
     `;
     const term = searchTerm || '';
     const rId = roleId || 0;
-    const [rows] = await pool.execute(query, [term, term, term, rId, rId]);
+    const mId = managerId || 0;
+    const [rows] = await pool.execute(query, [term, term, term, rId, rId, mId, mId]);
     return rows[0].total;
   }
 
