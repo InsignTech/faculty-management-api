@@ -23,16 +23,50 @@ class EmployeeModel {
   }
 
   static async getAll() {
-    const [rows] = await pool.execute('CALL sp_get_employees()');
-    return rows[0];
+    const query = `
+      SELECT 
+          e.*,
+          d.departmentname,
+          r.role AS role_name,
+          des.designation AS designation_name,
+          m.employee_name AS manager_name,
+          mr.role AS manager_role
+      FROM employee e
+      LEFT JOIN department d ON e.department_id = d.department_id
+      LEFT JOIN app_role r ON e.role_id = r.role_id
+      LEFT JOIN designation des ON e.designation_id = des.designation_id
+      LEFT JOIN employee m ON e.reporting_manager_id = m.employee_id
+      LEFT JOIN app_role mr ON m.role_id = mr.role_id
+      ORDER BY e.employee_id DESC
+    `;
+    const [rows] = await pool.execute(query);
+    return rows;
   }
 
   static async getFiltered(searchTerm = '', roleId = 0) {
-    const [rows] = await pool.execute('CALL sp_get_employees_filtered(?, ?)', [
-      searchTerm || '',
-      roleId || 0
-    ]);
-    return rows[0];
+    const query = `
+      SELECT 
+          e.*,
+          d.departmentname,
+          r.role AS role_name,
+          des.designation AS designation_name,
+          m.employee_name AS manager_name,
+          mr.role AS manager_role
+      FROM employee e
+      LEFT JOIN department d ON e.department_id = d.department_id
+      LEFT JOIN app_role r ON e.role_id = r.role_id
+      LEFT JOIN designation des ON e.designation_id = des.designation_id
+      LEFT JOIN employee m ON e.reporting_manager_id = m.employee_id
+      LEFT JOIN app_role mr ON m.role_id = mr.role_id
+      WHERE 
+          (? = '' OR e.employee_name LIKE CONCAT('%', ?, '%') OR e.employee_code LIKE CONCAT('%', ?, '%'))
+          AND (? = 0 OR e.role_id = ?)
+      ORDER BY e.employee_id DESC
+    `;
+    const term = searchTerm || '';
+    const rId = roleId || 0;
+    const [rows] = await pool.execute(query, [term, term, term, rId, rId]);
+    return rows;
   }
 
   static async getPotentialManagers(searchTerm = '', departmentId = 0, excludeId = 0) {
@@ -74,6 +108,14 @@ class EmployeeModel {
   static async delete(id) {
     await pool.execute('CALL sp_delete_employee(?)', [id]);
     return true;
+  }
+  
+  static async updateReportingManager(id, managerId) {
+    const [result] = await pool.execute(
+      'UPDATE employee SET reporting_manager_id = ? WHERE employee_id = ?',
+      [managerId || null, id]
+    );
+    return result;
   }
 }
 

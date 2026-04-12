@@ -6,23 +6,23 @@ const {
   getEmployeeById,
   updateEmployee,
   deleteEmployee,
+  updateReportingManager,
 } = require('../controllers/employeeController');
 const { protect, authorize } = require('../middleware/auth');
 
 const router = express.Router();
 
 router.use(protect);
-router.use(authorize('Admin'));
 
-router.route('/')
-  .get(getEmployees)
-  .post(createEmployee);
+router.get('/', authorize('Admin', 'admin', 'principal', 'super_admin', 'HOD', 'hod'), getEmployees);
+router.post('/', authorize('Admin', 'admin', 'principal', 'super_admin'), createEmployee);
 
-router.get('/potential-managers', getPotentialManagers);
+router.get('/potential-managers', authorize('Admin', 'admin', 'principal', 'super_admin', 'HOD', 'hod'), getPotentialManagers);
 
-router.route('/:id')
-  .get(getEmployeeById)
-  .put(updateEmployee)
-  .delete(deleteEmployee);
+router.get('/:id', authorize('Admin', 'admin', 'principal', 'super_admin', 'HOD', 'hod'), getEmployeeById);
+router.put('/:id', authorize('Admin', 'admin', 'principal', 'super_admin'), updateEmployee);
+router.delete('/:id', authorize('Admin', 'admin', 'principal', 'super_admin'), deleteEmployee);
+
+router.put('/:id/manager', authorize('Admin', 'admin', 'principal', 'super_admin', 'HOD', 'hod'), updateReportingManager);
 
 module.exports = router;

@@ -112,6 +112,19 @@ const deleteEmployee = async (req, res, next) => {
   }
 };
 
+const updateReportingManager = async (req, res, next) => {
+  try {
+    const { manager_id } = req.body;
+    const result = await EmployeeModel.updateReportingManager(req.params.id, manager_id);
+    if (result && result.affectedRows === 0) {
+      return next(new ErrorResponse('Employee not found', 404, 'NOT_FOUND'));
+    }
+    sendResponse(res, 200, 'Reporting manager updated successfully');
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   createEmployee,
   getEmployees,
@@ -119,4 +132,5 @@ module.exports = {
   getEmployeeById,
   updateEmployee,
   deleteEmployee,
+  updateReportingManager,
 };
