@@ -41,13 +41,23 @@ const createEmployee = async (req, res, next) => {
 
 const getEmployees = async (req, res, next) => {
   try {
-    const { search, role } = req.query;
-    if (search || role) {
-      const employees = await EmployeeModel.getFiltered(search, role);
-      return sendResponse(res, 200, 'Employees fetched successfully', employees);
-    }
-    const employees = await EmployeeModel.getAll();
-    sendResponse(res, 200, 'Employees fetched successfully', employees);
+    const { search, role, page = 1, limit = 10 } = req.query;
+    const offset = (page - 1) * limit;
+
+    const [employees, total] = await Promise.all([
+      EmployeeModel.getFiltered(search, role, parseInt(limit), parseInt(offset)),
+      EmployeeModel.getTotalCount(search, role)
+    ]);
+
+    sendResponse(res, 200, 'Employees fetched successfully', {
+      employees,
+      pagination: {
+        total,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        totalPages: Math.ceil(total / limit)
+      }
+    });
   } catch (error) {
     next(error);
   }
