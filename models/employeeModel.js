@@ -1,4 +1,6 @@
 const pool = require('../config/db');
+const bcrypt = require('bcryptjs');
+const UserModel = require('./userModel');
 
 class EmployeeModel {
   static async create(data) {
@@ -19,7 +21,29 @@ class EmployeeModel {
         data.basic_pay || 0.00
       ]
     );
-    return rows[0][0];
+    const employee = rows[0][0];
+
+    // Create user account for new employee
+    if (employee && employee.employee_id && data.email) {
+      try {
+        const defaultPassword = `${data.employee_code || 'User'}@123`;
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash(defaultPassword, salt);
+        
+        await UserModel.signup(
+          data.employee_name,
+          data.email,
+          hashedPassword,
+          data.role_id || 1,
+          employee.employee_id
+        );
+      } catch (err) {
+        console.error('Failed to create user account for employee:', err.message);
+        // We still return the employee as they were created, but log the error
+      }
+    }
+
+    return employee;
   }
 
   static async getAll() {
@@ -102,7 +126,18 @@ class EmployeeModel {
         data.basic_pay || 0.00
       ]
     );
-    return rows[0][0];
+    const result = rows[0][0];
+
+    // Update user account email if provided
+    if (data.email) {
+      try {
+        await UserModel.updateEmailByEmployeeId(id, data.email);
+      } catch (err) {
+        console.error('Failed to sync email to user_accounts:', err.message);
+      }
+    }
+
+    return result;
   }
 
   static async delete(id) {

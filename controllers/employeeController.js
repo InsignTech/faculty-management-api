@@ -14,26 +14,14 @@ const createEmployee = async (req, res, next) => {
         return next(new ErrorResponse('Email, Employee Name and Code are mandatory!', 400, 'VALIDATION_ERROR'));
     }
 
-    // First create the employee record
+    // The account creation is now handled inside EmployeeModel.create
     const result = await EmployeeModel.create(req.body);
     
-    if (result && result.employee_id) {
-        // Generate a random temporary password
-        const tempPassword = Math.random().toString(36).slice(-8);
-        const salt = await bcrypt.genSalt(10);
-        const hashedPassword = await bcrypt.hash(tempPassword, salt);
-        
-        // Create user account linked to this employee
-        await UserModel.signup(
-            employee_name, 
-            email, 
-            hashedPassword, 
-            role_id || 1, 
-            result.employee_id
-        );
-        
-        // Send welcome email with credentials
+    // Send welcome email if creation was successful
+    if (result && result.employee_id && email) {
         try {
+            // Default password pattern used in Model: [EmployeeCode]@123
+            const tempPassword = `${employee_code || 'User'}@123`;
             await sendWelcomeEmail({ toEmail: email, employeeName: employee_name, tempPassword });
             console.log(`Welcome email sent to: ${email}`);
         } catch (emailErr) {
@@ -41,7 +29,7 @@ const createEmployee = async (req, res, next) => {
         }
     }
 
-    sendResponse(res, 201, 'Employee created successfully with user account', result);
+    sendResponse(res, 201, 'Employee created successfully', result);
   } catch (error) {
     // Check for MySQL duplicate key error (ER_DUP_ENTRY)
     if (error.code === 'ER_SIGNAL_NOT_FOUND' || error.sqlState === '45000') {

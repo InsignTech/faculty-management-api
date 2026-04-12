@@ -35,6 +35,14 @@ class UserModel {
         const [rows] = await pool.execute('CALL sp_reset_password_with_otp(?, ?, ?)', [email, otp, newHashedPassword]);
         return rows[0][0];
     }
+
+    static async updateEmailByEmployeeId(employeeId, newEmail) {
+        const [result] = await pool.execute(
+            'UPDATE user_accounts SET email = ? WHERE employee_id = ?',
+            [newEmail, employeeId]
+        );
+        return result;
+    }
 }
 
 module.exports = UserModel;
