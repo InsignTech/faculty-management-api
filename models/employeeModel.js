@@ -182,21 +182,23 @@ class EmployeeModel {
   static async getSubordinates(managerId) {
     const query = `
       WITH RECURSIVE subordinates AS (
-          SELECT employee_id, employee_name, employee_code, reporting_manager_id, role_id, department_id
+          SELECT employee_id, employee_name, employee_code, reporting_manager_id, role_id, department_id, designation_id, email
           FROM employee
           WHERE reporting_manager_id = ?
           UNION ALL
-          SELECT e.employee_id, e.employee_name, e.employee_code, e.reporting_manager_id, e.role_id, e.department_id
+          SELECT e.employee_id, e.employee_name, e.employee_code, e.reporting_manager_id, e.role_id, e.department_id, e.designation_id, e.email
           FROM employee e
           INNER JOIN subordinates s ON e.reporting_manager_id = s.employee_id
       )
       SELECT 
         s.*,
         d.departmentname,
-        r.role AS role_name
+        r.role AS role_name,
+        des.designation AS designation_name
       FROM subordinates s
       LEFT JOIN department d ON s.department_id = d.department_id
       LEFT JOIN app_role r ON s.role_id = r.role_id
+      LEFT JOIN designation des ON s.designation_id = des.designation_id
       ORDER BY s.employee_name ASC;
     `;
     const [rows] = await pool.execute(query, [managerId]);
