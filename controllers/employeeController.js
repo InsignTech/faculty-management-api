@@ -128,6 +128,19 @@ const updateReportingManager = async (req, res, next) => {
   }
 };
 
+const getSubordinates = async (req, res, next) => {
+  try {
+    const managerId = req.user.employeeId;
+    if (!managerId) {
+      return next(new ErrorResponse('User is not associated with an employee record', 400, 'MISSING_EMPLOYEE_RECORD'));
+    }
+    const subordinates = await EmployeeModel.getSubordinates(managerId);
+    sendResponse(res, 200, 'Subordinates fetched successfully', subordinates);
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   createEmployee,
   getEmployees,
@@ -136,4 +149,5 @@ module.exports = {
   updateEmployee,
   deleteEmployee,
   updateReportingManager,
+  getSubordinates,
 };

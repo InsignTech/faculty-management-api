@@ -7,6 +7,7 @@ const {
   updateEmployee,
   deleteEmployee,
   updateReportingManager,
+  getSubordinates,
 } = require('../controllers/employeeController');
 const { protect, authorize } = require('../middleware/auth');
 
@@ -18,6 +19,7 @@ router.get('/', authorize('Admin', 'admin', 'principal', 'super_admin', 'HOD', '
 router.post('/', authorize('Admin', 'admin', 'principal', 'super_admin'), createEmployee);
 
 router.get('/potential-managers', authorize('Admin', 'admin', 'principal', 'super_admin', 'HOD', 'hod'), getPotentialManagers);
+router.get('/subordinates', authorize('Admin', 'admin', 'principal', 'super_admin', 'HOD', 'hod'), getSubordinates);
 
 router.get('/:id', authorize('Admin', 'admin', 'principal', 'super_admin', 'HOD', 'hod'), getEmployeeById);
 router.put('/:id', authorize('Admin', 'admin', 'principal', 'super_admin'), updateEmployee);

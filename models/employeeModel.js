@@ -178,6 +178,48 @@ class EmployeeModel {
     );
     return result;
   }
+
+  static async getSubordinates(managerId) {
+    const query = `
+      WITH RECURSIVE subordinates AS (
+          SELECT employee_id, employee_name, employee_code, reporting_manager_id, role_id, department_id
+          FROM employee
+          WHERE reporting_manager_id = ?
+          UNION ALL
+          SELECT e.employee_id, e.employee_name, e.employee_code, e.reporting_manager_id, e.role_id, e.department_id
+          FROM employee e
+          INNER JOIN subordinates s ON e.reporting_manager_id = s.employee_id
+      )
+      SELECT 
+        s.*,
+        d.departmentname,
+        r.role AS role_name
+      FROM subordinates s
+      LEFT JOIN department d ON s.department_id = d.department_id
+      LEFT JOIN app_role r ON s.role_id = r.role_id
+      ORDER BY s.employee_name ASC;
+    `;
+    const [rows] = await pool.execute(query, [managerId]);
+    return rows;
+  }
+
+  static async isSubordinate(managerId, targetId) {
+    if (!managerId || !targetId) return false;
+    const query = `
+      WITH RECURSIVE subordinates AS (
+          SELECT employee_id
+          FROM employee
+          WHERE reporting_manager_id = ?
+          UNION ALL
+          SELECT e.employee_id
+          FROM employee e
+          INNER JOIN subordinates s ON e.reporting_manager_id = s.employee_id
+      )
+      SELECT COUNT(*) as count FROM subordinates WHERE employee_id = ?;
+    `;
+    const [rows] = await pool.execute(query, [managerId, targetId]);
+    return rows[0].count > 0;
+  }
 }
 
 module.exports = EmployeeModel;

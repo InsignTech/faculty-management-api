@@ -1,4 +1,5 @@
 const AttendanceModel = require('../models/attendanceModel');
+const EmployeeModel = require('../models/employeeModel');
 const { sendResponse } = require('../utils/responseHelper');
 const ErrorResponse = require('../utils/errorResponse');
 
@@ -13,22 +14,50 @@ const processAttendanceLogs = async (req, res, next) => {
 
 const getMyAttendance = async (req, res, next) => {
     try {
-        const employeeId = req.user.employeeId;
-        if (!employeeId) return next(new ErrorResponse('User is not associated with an employee record', 400));
+        const loggedInEmpId = req.user.employeeId;
+        const targetEmpId = req.query.employeeId || loggedInEmpId;
+
+        if (!targetEmpId) return next(new ErrorResponse('User is not associated with an employee record', 400, 'MISSING_EMPLOYEE_RECORD'));
+
+        // Permission check
+        const userRole = req.user.role?.toLowerCase();
+        const isAdmin = ['admin', 'super_admin', 'principal'].includes(userRole);
+        
+        if (!isAdmin && parseInt(targetEmpId) !== parseInt(loggedInEmpId)) {
+            const isSub = await EmployeeModel.isSubordinate(loggedInEmpId, targetEmpId);
+            if (!isSub) {
+                return next(new ErrorResponse('You are not authorized to view this employee\'s attendance', 403, 'FORBIDDEN'));
+            }
+        }
+
         const month = req.query.month || new Date().getMonth() + 1;
         const year = req.query.year || new Date().getFullYear();
-        const attendance = await AttendanceModel.getEmployeeAttendance(employeeId, month, year);
+        const attendance = await AttendanceModel.getEmployeeAttendance(targetEmpId, month, year);
         sendResponse(res, 200, 'Attendance history fetched successfully', attendance);
     } catch (error) { next(error); }
 };
 
 const getMyAttendanceSummary = async (req, res, next) => {
     try {
-        const employeeId = req.user.employeeId;
-        if (!employeeId) return next(new ErrorResponse('User is not associated with an employee record', 400));
+        const loggedInEmpId = req.user.employeeId;
+        const targetEmpId = req.query.employeeId || loggedInEmpId;
+
+        if (!targetEmpId) return next(new ErrorResponse('User is not associated with an employee record', 400, 'MISSING_EMPLOYEE_RECORD'));
+
+        // Permission check
+        const userRole = req.user.role?.toLowerCase();
+        const isAdmin = ['admin', 'super_admin', 'principal'].includes(userRole);
+
+        if (!isAdmin && parseInt(targetEmpId) !== parseInt(loggedInEmpId)) {
+            const isSub = await EmployeeModel.isSubordinate(loggedInEmpId, targetEmpId);
+            if (!isSub) {
+                return next(new ErrorResponse('You are not authorized to view this employee\'s attendance summary', 403, 'FORBIDDEN'));
+            }
+        }
+
         const month = req.query.month || new Date().getMonth() + 1;
         const year = req.query.year || new Date().getFullYear();
-        const summary = await AttendanceModel.getAttendanceSummary(employeeId, month, year);
+        const summary = await AttendanceModel.getAttendanceSummary(targetEmpId, month, year);
         sendResponse(res, 200, 'Attendance summary fetched', summary);
     } catch (error) { next(error); }
 };
@@ -36,7 +65,7 @@ const getMyAttendanceSummary = async (req, res, next) => {
 const requestAdjustment = async (req, res, next) => {
     try {
         const employeeId = req.user.employeeId;
-        if (!employeeId) return next(new ErrorResponse('User is not associated with an employee record', 400));
+        if (!employeeId) return next(new ErrorResponse('User is not associated with an employee record', 400, 'MISSING_EMPLOYEE_RECORD'));
         const { type, date, punch_time, remarks, attachment_path } = req.body;
         if (!type || !date || !punch_time) return next(new ErrorResponse('type, date and punch_time are required', 400));
         const result = await AttendanceModel.requestAdjustment({ employee_id: employeeId, type, date, punch_time, remarks, attachment_path });
@@ -47,7 +76,7 @@ const requestAdjustment = async (req, res, next) => {
 const getMyAdjustments = async (req, res, next) => {
     try {
         const employeeId = req.user.employeeId;
-        if (!employeeId) return next(new ErrorResponse('User is not associated with an employee record', 400));
+        if (!employeeId) return next(new ErrorResponse('User is not associated with an employee record', 400, 'MISSING_EMPLOYEE_RECORD'));
         const adjustments = await AttendanceModel.getEmployeeAdjustments(employeeId);
         sendResponse(res, 200, 'Adjustment history fetched', adjustments);
     } catch (error) { next(error); }
