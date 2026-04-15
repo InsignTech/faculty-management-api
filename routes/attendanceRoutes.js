@@ -28,8 +28,8 @@ router.get('/my-adjustments', getMyAdjustments);
 router.delete('/adjustments/:id', deleteAdjustment);
 
 // Admin / Manager routes
-router.get('/pending-adjustments', authorize('Admin'), getPendingAdjustments);
-router.put('/adjustments/:id/approve', authorize('Admin'), approveAdjustment);
-router.put('/adjustments/:id/reject', authorize('Admin'), rejectAdjustment);
+router.get('/pending-adjustments', getPendingAdjustments);
+router.put('/adjustments/:id/approve', approveAdjustment);
+router.put('/adjustments/:id/reject', rejectAdjustment);
 
 module.exports = router;

@@ -205,6 +205,15 @@ class AttendanceModel {
         return rows;
     }
 
+    // Get a specific adjustment by ID
+    static async getEmployeeAdjustmentsById(id) {
+        const [rows] = await pool.execute(
+            `SELECT * FROM attendance_adjustments WHERE adjustment_id = ?`,
+            [id]
+        );
+        return rows;
+    }
+
     // Admin: Get all pending adjustments
     static async getPendingAdjustments() {
         const [rows] = await pool.query(`
@@ -214,6 +223,29 @@ class AttendanceModel {
             WHERE aj.status = 'Pending' 
             ORDER BY aj.requested_on ASC
         `);
+        return rows;
+    }
+
+    // Manager/HOD: Get pending adjustments for all subordinates
+    static async getPendingSubordinateAdjustments(managerId) {
+        const query = `
+            WITH RECURSIVE subordinates AS (
+                SELECT employee_id
+                FROM employee
+                WHERE reporting_manager_id = ?
+                UNION ALL
+                SELECT e.employee_id
+                FROM employee e
+                INNER JOIN subordinates s ON e.reporting_manager_id = s.employee_id
+            )
+            SELECT aj.*, e.employee_name, e.employee_code 
+            FROM attendance_adjustments aj 
+            JOIN employee e ON aj.employee_id = e.employee_id 
+            WHERE aj.employee_id IN (SELECT employee_id FROM subordinates)
+              AND aj.status = 'Pending'
+            ORDER BY aj.requested_on ASC
+        `;
+        const [rows] = await pool.execute(query, [managerId]);
         return rows;
     }
 

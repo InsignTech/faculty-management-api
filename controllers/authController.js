@@ -1,6 +1,7 @@
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const UserModel = require('../models/userModel');
+const EmployeeModel = require('../models/employeeModel');
 const { sendResponse } = require('../utils/responseHelper');
 const ErrorResponse = require('../utils/errorResponse');
 const { sendOTPEmail } = require('../utils/emailService');
@@ -50,6 +51,13 @@ const login = async (req, res, next) => {
             { expiresIn: process.env.JWT_EXPIRES_IN || '1d' }
         );
 
+        // Check if user is a manager (has subordinates)
+        let hasSubordinates = false;
+        if (user.employee_id) {
+            const subs = await EmployeeModel.getFiltered('', 0, 1, 0, user.employee_id);
+            hasSubordinates = subs.length > 0;
+        }
+
         sendResponse(res, 200, 'Login successful', {
             token,
             user: {
@@ -58,7 +66,8 @@ const login = async (req, res, next) => {
                 email: user.email,
                 role: user.role_name,
                 roleId: user.role_id,
-                employeeId: user.employee_id
+                employeeId: user.employee_id,
+                hasSubordinates
             },
         });
     } catch (error) {
