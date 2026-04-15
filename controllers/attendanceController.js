@@ -77,7 +77,11 @@ const getMyAdjustments = async (req, res, next) => {
     try {
         const employeeId = req.user.employeeId;
         if (!employeeId) return next(new ErrorResponse('User is not associated with an employee record', 400, 'MISSING_EMPLOYEE_RECORD'));
-        const adjustments = await AttendanceModel.getEmployeeAdjustments(employeeId);
+        
+        const month = req.query.month || null;
+        const year = req.query.year || null;
+        
+        const adjustments = await AttendanceModel.getEmployeeAdjustments(employeeId, month, year);
         sendResponse(res, 200, 'Adjustment history fetched', adjustments);
     } catch (error) { next(error); }
 };
@@ -106,6 +110,20 @@ const rejectAdjustment = async (req, res, next) => {
         const { remarks } = req.body;
         const result = await AttendanceModel.rejectAdjustment(id, approverId, remarks);
         sendResponse(res, 200, 'Adjustment rejected', result);
+    } catch (error) { next(error); }
+};
+
+const deleteAdjustment = async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const employeeId = req.user.employeeId;
+        const result = await AttendanceModel.deleteAdjustment(id, employeeId);
+        
+        if (result.affected_rows === 0) {
+            return next(new ErrorResponse('Adjustment not found or is already processed', 404));
+        }
+        
+        sendResponse(res, 200, 'Adjustment request deleted successfully', result);
     } catch (error) { next(error); }
 };
 
@@ -151,5 +169,6 @@ module.exports = {
     getPendingAdjustments,
     approveAdjustment,
     rejectAdjustment,
+    deleteAdjustment,
     uploadMachineLogs
 };
