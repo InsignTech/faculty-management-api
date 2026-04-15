@@ -1,0 +1,82 @@
+const ReportModel = require('../models/reportModel');
+const { sendResponse } = require('../utils/responseHelper');
+const ErrorResponse = require('../utils/errorResponse');
+let XLSX;
+try {
+    XLSX = require('xlsx');
+} catch (e) {
+    XLSX = null;
+}
+
+const getAttendanceReport = async (req, res, next) => {
+    try {
+        const { startDate, endDate, employeeId, departmentId, page = 1, limit = 50 } = req.query;
+
+        if (!startDate || !endDate) {
+            return next(new ErrorResponse('Start and End dates are required', 400));
+        }
+
+        const isAdmin = ['Admin', 'Principal', 'super_admin'].includes(req.user.role_name);
+        const reportData = await ReportModel.getAttendanceReport(req.user.employee_id, isAdmin, {
+            startDate, endDate, employeeId, departmentId
+        });
+
+        // Manual pagination since the report is generated as a matrix
+        const startIndex = (page - 1) * limit;
+        const paginatedData = reportData.slice(startIndex, startIndex + parseInt(limit));
+
+        sendResponse(res, 200, 'Report fetched successfully', {
+            data: paginatedData,
+            totalRows: reportData.length,
+            currentPage: parseInt(page),
+            totalPages: Math.ceil(reportData.length / limit)
+        });
+    } catch (error) { next(error); }
+};
+
+const exportAttendanceReport = async (req, res, next) => {
+    try {
+        if (!XLSX) {
+            return next(new ErrorResponse('Excel export library (xlsx) is not installed on the server. Please run "npm install xlsx".', 500));
+        }
+
+        const { startDate, endDate, employeeId, departmentId } = req.query;
+
+        if (!startDate || !endDate) {
+            return next(new ErrorResponse('Start and End dates are required', 400));
+        }
+
+        const isAdmin = ['Admin', 'Principal', 'super_admin'].includes(req.user.role_name);
+        const reportData = await ReportModel.getAttendanceReport(req.user.employee_id, isAdmin, {
+            startDate, endDate, employeeId, departmentId
+        });
+
+        // Format data for Excel
+        const excelData = reportData.map(row => ({
+            'Date': row.date,
+            'Emp Code': row.employee_code,
+            'Name': row.employee_name,
+            'Department': row.department,
+            'Status': row.status,
+            'Remark': row.remark,
+            'Punch In': row.punch_in || '-',
+            'Punch Out': row.punch_out || '-'
+        }));
+
+        const wb = XLSX.utils.book_new();
+        const ws = XLSX.utils.json_to_sheet(excelData);
+        XLSX.utils.book_append_sheet(wb, ws, 'Attendance Report');
+
+        const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename=Attendance_Report_${startDate}_to_${endDate}.xlsx`);
+        res.send(buf);
+
+    } catch (error) { next(error); }
+};
+
+module.exports = {
+    getAttendanceReport,
+    exportAttendanceReport
+};
