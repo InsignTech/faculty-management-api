@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const SettingsModel = require('./settingsModel');
 
 class AttendanceModel {
     // Process raw logs for a specific date
@@ -109,7 +110,19 @@ class AttendanceModel {
                 );
                 
                 const approvedCount = countRows[0].approved_count;
-                const deduction = approvedCount < 3 ? 0.00 : 0.50;
+                
+                // Fetch dynamic regularization limit from settings
+                let limit = 3;
+                try {
+                    const limitSetting = await SettingsModel.getSettingByKey('regularization_limit');
+                    if (limitSetting && limitSetting.settings_value) {
+                        limit = parseInt(limitSetting.settings_value);
+                    }
+                } catch (err) {
+                    console.error('Error fetching regularization limit setting:', err);
+                }
+
+                const deduction = approvedCount < limit ? 0.00 : 0.50;
 
                 await conn.execute(
                     `UPDATE attendance 
