@@ -20,6 +20,9 @@ const app = require('./app');
 const pool = require('./config/db');
 require('dotenv').config();
 
+// Initialize Cron Jobs
+require('./cron/attendanceCron');
+
 debugLog("Step 2: Deployment timestamp...");
 console.log("🔥 NEW DEPLOY -", new Date().toISOString());
 

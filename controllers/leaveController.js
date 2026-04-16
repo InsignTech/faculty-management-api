@@ -94,11 +94,27 @@ const actionRequest = async (req, res, next) => {
     } catch (error) { next(error); }
 };
 
+// @desc    Delete a pending leave request
+// @route   DELETE /api/leaves/:id
+// @access  Private
+const deleteRequest = async (req, res, next) => {
+    try {
+        const result = await LeaveModel.delete(req.params.id, req.user.employeeId);
+        
+        if (result.affectedRows === 0) {
+            return next(new ErrorResponse('Request not found or not in Pending status', 404));
+        }
+
+        sendResponse(res, 200, 'Leave request deleted successfully');
+    } catch (error) { next(error); }
+};
+
 module.exports = {
     getLeaveBalance,
     getLeaveTypes,
     applyLeave,
     getMyRequests,
     getApprovals,
-    actionRequest
+    actionRequest,
+    deleteRequest
 };

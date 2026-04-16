@@ -67,6 +67,17 @@ class LeaveModel {
         );
         return rows[0][0];
     }
+
+    /**
+     * Delete a pending leave request (Ownership check included)
+     */
+    static async delete(requestId, employeeId) {
+        const [result] = await pool.execute(
+            'DELETE FROM leave_requests WHERE leave_request_id = ? AND employee_id = ? AND status = "Pending"',
+            [requestId, employeeId]
+        );
+        return result;
+    }
 }
 
 module.exports = LeaveModel;

@@ -5,7 +5,8 @@ const {
     applyLeave, 
     getMyRequests, 
     getApprovals, 
-    actionRequest 
+    actionRequest,
+    deleteRequest
 } = require('../controllers/leaveController');
 const { protect, authorize } = require('../middleware/auth');
 const router = express.Router();
@@ -17,6 +18,7 @@ router.get('/balance', getLeaveBalance);
 router.get('/types', getLeaveTypes);
 router.get('/my-requests', getMyRequests);
 router.post('/apply', applyLeave);
+router.delete('/:id', deleteRequest);
 
 // Manager/Admin routes
 router.get('/approvals', authorize('Admin', 'Principal', 'HOD', 'super_admin'), getApprovals);
