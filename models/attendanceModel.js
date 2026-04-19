@@ -8,6 +8,49 @@ class AttendanceModel {
         return rows[0][0];
     }
 
+    // Process raw logs for all missing dates up to today
+    static async processMissedLogs() {
+        const [rows] = await pool.query("SELECT MAX(date) as latest_date FROM attendance");
+        let latestDate = rows[0].latest_date;
+        
+        let startDate;
+        if (!latestDate) {
+            const [minLog] = await pool.query("SELECT DATE(MIN(punch_time)) as min_date FROM attendance_detail_log");
+            if (!minLog[0].min_date) {
+                return { total_processed: 0, days_processed: 0 }; 
+            }
+            startDate = new Date(minLog[0].min_date);
+        } else {
+            startDate = new Date(latestDate);
+            startDate.setDate(startDate.getDate() + 1);
+        }
+
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        startDate.setHours(0, 0, 0, 0);
+        
+        let currentDate = startDate;
+        let totalProcessed = 0;
+        let daysProcessed = 0;
+
+        while (currentDate <= today) {
+            const year = currentDate.getFullYear();
+            const month = String(currentDate.getMonth() + 1).padStart(2, '0');
+            const day = String(currentDate.getDate()).padStart(2, '0');
+            const localISOTime = `${year}-${month}-${day}`;
+            
+            const [resultRows] = await pool.execute('CALL sp_process_attendance_logs(?)', [localISOTime]);
+            const rowsProcessed = resultRows[0][0]?.processed_rows || 0;
+            
+            totalProcessed += rowsProcessed;
+            daysProcessed++;
+            
+            currentDate.setDate(currentDate.getDate() + 1);
+        }
+        
+        return { total_processed: totalProcessed, days_processed: daysProcessed };
+    }
+
     // Get attendance history for an employee
     static async getEmployeeAttendance(employeeId, month, year) {
         const [rows] = await pool.execute('CALL sp_get_employee_attendance(?, ?, ?)', [employeeId, month, year]);

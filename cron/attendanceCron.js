@@ -8,15 +8,11 @@ cron.schedule('59 23 * * *', async () => {
     debugLog('⏱️  [CRON] Starting nightly attendance processing...', 'INFO');
     
     try {
-        // Format today's date as YYYY-MM-DD
-        const today = new Date();
-        const dateString = today.toISOString().split('T')[0];
+        debugLog(`⏱️  [CRON] Checking for missing log days up to today...`, 'INFO');
         
-        debugLog(`⏱️  [CRON] Processing logs for date: ${dateString}`, 'INFO');
+        const result = await AttendanceModel.processMissedLogs();
         
-        const result = await AttendanceModel.processLogs(dateString);
-        
-        debugLog(`✅ [CRON] Nightly attendance processing completed! Processed rows: ${result?.processed_rows || 0}`, 'SUCCESS');
+        debugLog(`✅ [CRON] Nightly attendance processing completed! Processed ${result.total_processed} rows across ${result.days_processed} day(s).`, 'SUCCESS');
     } catch (error) {
         debugLog(`❌ [CRON] Nightly attendance processing failed: ${error.message}`, 'ERROR');
     }
