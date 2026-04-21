@@ -16,8 +16,9 @@ const getAttendanceReport = async (req, res, next) => {
             return next(new ErrorResponse('Start and End dates are required', 400));
         }
 
-        const isAdmin = ['Admin', 'Principal', 'super_admin'].includes(req.user.role_name);
-        const reportData = await ReportModel.getAttendanceReport(req.user.employee_id, isAdmin, {
+        const userRole = (req.user.role || '').toLowerCase();
+        const isAdmin = ['admin', 'principal', 'super_admin'].includes(userRole);
+        const reportData = await ReportModel.getAttendanceReport(req.user.employeeId, isAdmin, {
             startDate, endDate, employeeId, departmentId
         });
 
@@ -46,8 +47,9 @@ const exportAttendanceReport = async (req, res, next) => {
             return next(new ErrorResponse('Start and End dates are required', 400));
         }
 
-        const isAdmin = ['Admin', 'Principal', 'super_admin'].includes(req.user.role_name);
-        const reportData = await ReportModel.getAttendanceReport(req.user.employee_id, isAdmin, {
+        const userRole = (req.user.role || '').toLowerCase();
+        const isAdmin = ['admin', 'principal', 'super_admin'].includes(userRole);
+        const reportData = await ReportModel.getAttendanceReport(req.user.employeeId, isAdmin, {
             startDate, endDate, employeeId, departmentId
         });
 

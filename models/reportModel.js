@@ -11,12 +11,12 @@ class ReportModel {
         let employeePoolQuery = `
             SELECT 
                 e.employee_id, e.employee_code, e.employee_name, 
-                d.department_name, r.role_name, 
+                d.departmentname, r.role, 
                 e.reporting_manager_id,
                 e.role_id, e.designation_id
             FROM employee e
             LEFT JOIN department d ON e.department_id = d.department_id
-            LEFT JOIN role r ON e.role_id = r.role_id
+            LEFT JOIN app_role r ON e.role_id = r.role_id
             WHERE e.active = 1
         `;
 
@@ -83,7 +83,7 @@ class ReportModel {
 
         for (const emp of employees) {
             let curr = new Date(start);
-            
+
             // Resolve Weekly Off for this employee
             const empWO = employeePolicies.find(p => p.employee_id === emp.employee_id);
             const desigWO = designationPolicies.find(p => p.designation_id === emp.designation_id);
@@ -91,9 +91,9 @@ class ReportModel {
             const sysWO = systemPolicy[0] || { weekly_off: '["Sunday"]' };
 
             const weeklyOffs = JSON.parse(
-                (empWO && empWO.weekly_off) || 
-                (desigWO && desigWO.weekly_off) || 
-                (roleWO && roleWO.weekly_off) || 
+                (empWO && empWO.weekly_off) ||
+                (desigWO && desigWO.weekly_off) ||
+                (roleWO && roleWO.weekly_off) ||
                 sysWO.weekly_off || '["Sunday"]'
             );
 
@@ -131,7 +131,7 @@ class ReportModel {
                     employee_id: emp.employee_id,
                     employee_code: emp.employee_code,
                     employee_name: emp.employee_name,
-                    department: emp.department_name,
+                    department: emp.departmentname,
                     date: dateStr,
                     status: status,
                     remark: remark,
