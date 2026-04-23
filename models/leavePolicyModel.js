@@ -9,11 +9,12 @@ class LeavePolicyModel {
 
   static async createSystemPolicy(data) {
     const [rows] = await pool.execute(
-      'CALL sp_create_leave_policy(?, ?, ?, ?)',
+      'CALL sp_create_leave_policy(?, ?, ?, ?, ?)',
       [
         data.policy_name,
         data.policy_year,
         JSON.stringify(data.policy_value),
+        JSON.stringify(data.weekly_off || ["Sunday"]),
         data.created_by || 'admin'
       ]
     );
@@ -22,12 +23,13 @@ class LeavePolicyModel {
 
   static async updateSystemPolicy(id, data) {
     const [rows] = await pool.execute(
-      'CALL sp_update_leave_policy(?, ?, ?, ?)',
+      'CALL sp_update_leave_policy(?, ?, ?, ?, ?)',
       [
         id,
         data.policy_name,
         data.policy_year,
-        JSON.stringify(data.policy_value)
+        JSON.stringify(data.policy_value),
+        JSON.stringify(data.weekly_off || ["Sunday"])
       ]
     );
     return rows[0][0];
@@ -55,11 +57,12 @@ class LeavePolicyModel {
 
   static async saveDesignationPolicy(data) {
     const [rows] = await pool.execute(
-      'CALL sp_save_designation_policy(?, ?, ?, ?)',
+      'CALL sp_save_designation_policy(?, ?, ?, ?, ?)',
       [
         data.leave_policy_id,
         data.designation_id,
         JSON.stringify(data.policy_value),
+        JSON.stringify(data.weekly_off || ["Sunday"]),
         data.created_by || 'admin'
       ]
     );
@@ -105,11 +108,12 @@ class LeavePolicyModel {
 
   static async saveEmployeePolicy(data) {
     const [rows] = await pool.execute(
-      'CALL sp_save_employee_policy(?, ?, ?, ?)',
+      'CALL sp_save_employee_policy(?, ?, ?, ?, ?)',
       [
         data.leave_policy_id,
         data.employee_id,
         JSON.stringify(data.policy_value),
+        JSON.stringify(data.weekly_off || ["Sunday"]),
         data.created_by || 'admin'
       ]
     );

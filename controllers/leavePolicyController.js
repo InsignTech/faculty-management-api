@@ -10,7 +10,8 @@ const getSystemPolicies = async (req, res, next) => {
     // Parse JSON values
     const parsedPolicies = policies.map(p => ({
       ...p,
-      policy_value: p.policy_value ? JSON.parse(p.policy_value) : []
+      policy_value: p.policy_value ? JSON.parse(p.policy_value) : [],
+      weekly_off: p.weekly_off ? JSON.parse(p.weekly_off) : ["Sunday"]
     }));
     sendResponse(res, 200, 'System policies fetched successfully', parsedPolicies);
   } catch (error) {
@@ -20,7 +21,7 @@ const getSystemPolicies = async (req, res, next) => {
 
 const createSystemPolicy = async (req, res, next) => {
   try {
-    const { policy_name, policy_year, policy_value } = req.body;
+    const { policy_name, policy_year, policy_value, weekly_off } = req.body;
     if (!policy_name || !policy_year) {
       return next(new ErrorResponse('Policy name and year are required', 400));
     }
@@ -29,6 +30,7 @@ const createSystemPolicy = async (req, res, next) => {
       policy_name,
       policy_year,
       policy_value: policy_value || [],
+      weekly_off: weekly_off || ["Sunday"],
       created_by
     });
     sendResponse(res, 201, 'System policy created successfully', result);
@@ -39,11 +41,12 @@ const createSystemPolicy = async (req, res, next) => {
 
 const updateSystemPolicy = async (req, res, next) => {
   try {
-    const { policy_name, policy_year, policy_value } = req.body;
+    const { policy_name, policy_year, policy_value, weekly_off } = req.body;
     const result = await LeavePolicyModel.updateSystemPolicy(req.params.id, {
       policy_name,
       policy_year,
-      policy_value
+      policy_value,
+      weekly_off
     });
     sendResponse(res, 200, 'System policy updated successfully', result);
   } catch (error) {
