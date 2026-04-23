@@ -101,6 +101,13 @@ class ReportModel {
                 const dateStr = curr.toISOString().split('T')[0];
                 const dayName = curr.toLocaleDateString('en-US', { weekday: 'long' });
 
+                const dayAttendance = attendance.filter(a =>
+                    a.employee_id === emp.employee_id &&
+                    a.date.toISOString().split('T')[0] === dateStr
+                );
+
+                const punchIn = dayAttendance.find(a => a.type === 'PunchIn');
+                const punchOut = dayAttendance.find(a => a.type === 'PunchOut');
                 // Find data for this day
                 const empAttendance = attendance.find(a => a.employee_id === emp.employee_id && a.date.toISOString().split('T')[0] === dateStr);
                 const empLeave = leaves.find(l => {
@@ -114,9 +121,12 @@ class ReportModel {
                 let status = 'Absent';
                 let remark = '';
 
-                if (empAttendance) {
-                    status = empAttendance.is_late ? 'Late' : 'Present';
-                    remark = empAttendance.type === 'Onduty' ? 'On Duty' : '';
+                if (dayAttendance.length > 0) {
+                    const anyLate = dayAttendance.some(a => a.is_late === 1);
+                    const isOnduty = dayAttendance.some(a => a.type === 'Onduty');
+
+                    status = anyLate ? 'Late' : 'Present';
+                    remark = isOnduty ? 'On Duty' : '';
                 } else if (empLeave) {
                     status = 'Leave';
                     remark = empLeave.leave_type;
@@ -135,8 +145,8 @@ class ReportModel {
                     date: dateStr,
                     status: status,
                     remark: remark,
-                    punch_in: empAttendance && empAttendance.type === 'PunchIn' ? empAttendance.punch_time : null,
-                    punch_out: empAttendance && empAttendance.type === 'PunchOut' ? empAttendance.punch_time : null,
+                    punch_in: punchIn ? punchIn.punch_time : null,
+                    punch_out: punchOut ? punchOut.punch_time : null,
                 });
 
                 curr.setDate(curr.getDate() + 1);
