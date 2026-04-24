@@ -125,7 +125,18 @@ class ReportModel {
                     const anyLate = dayAttendance.some(a => a.is_late === 1);
                     const isOnduty = dayAttendance.some(a => a.type === 'Onduty');
 
-                    status = anyLate ? 'Late' : 'Present';
+                    const hasPunchIn = punchIn && punchIn.punch_time;
+                    const hasPunchOut = punchOut && punchOut.punch_time;
+
+                    // 🔥 PRIORITY: Incomplete punch = Absent
+                    if (!hasPunchIn || !hasPunchOut) {
+                        status = 'Absent';
+                    } else if (anyLate) {
+                        status = 'Late';
+                    } else {
+                        status = 'Present';
+                    }
+
                     remark = isOnduty ? 'On Duty' : '';
                 } else if (empLeave) {
                     status = 'Leave';
