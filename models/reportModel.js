@@ -81,25 +81,25 @@ class ReportModel {
         const start = new Date(startDate);
         const end = new Date(endDate);
 
-        for (const emp of employees) {
-            let curr = new Date(start);
+        let curr = new Date(start);
+        while (curr <= end) {
+            const dateStr = curr.toISOString().split('T')[0];
+            const dayName = curr.toLocaleDateString('en-US', { weekday: 'long' });
+            const isHoliday = holidays.find(h => h.holiday_date.toISOString().split('T')[0] === dateStr);
 
-            // Resolve Weekly Off for this employee
-            const empWO = employeePolicies.find(p => p.employee_id === emp.employee_id);
-            const desigWO = designationPolicies.find(p => p.designation_id === emp.designation_id);
-            const roleWO = rolePolicies.find(p => p.role_id === emp.role_id);
-            const sysWO = systemPolicy[0] || { weekly_off: '["Sunday"]' };
+            for (const emp of employees) {
+                // Resolve Weekly Off for this employee
+                const empWO = employeePolicies.find(p => p.employee_id === emp.employee_id);
+                const desigWO = designationPolicies.find(p => p.designation_id === emp.designation_id);
+                const roleWO = rolePolicies.find(p => p.role_id === emp.role_id);
+                const sysWO = systemPolicy[0] || { weekly_off: '["Sunday"]' };
 
-            const weeklyOffs = JSON.parse(
-                (empWO && empWO.weekly_off) ||
-                (desigWO && desigWO.weekly_off) ||
-                (roleWO && roleWO.weekly_off) ||
-                sysWO.weekly_off || '["Sunday"]'
-            );
-
-            while (curr <= end) {
-                const dateStr = curr.toISOString().split('T')[0];
-                const dayName = curr.toLocaleDateString('en-US', { weekday: 'long' });
+                const weeklyOffs = JSON.parse(
+                    (empWO && empWO.weekly_off) ||
+                    (desigWO && desigWO.weekly_off) ||
+                    (roleWO && roleWO.weekly_off) ||
+                    sysWO.weekly_off || '["Sunday"]'
+                );
 
                 const dayAttendance = attendance.filter(a =>
                     a.employee_id === emp.employee_id &&
@@ -108,14 +108,13 @@ class ReportModel {
 
                 const punchIn = dayAttendance.find(a => a.type === 'PunchIn');
                 const punchOut = dayAttendance.find(a => a.type === 'PunchOut');
-                // Find data for this day
-                const empAttendance = attendance.find(a => a.employee_id === emp.employee_id && a.date.toISOString().split('T')[0] === dateStr);
+
                 const empLeave = leaves.find(l => {
                     const lStart = new Date(l.start_date);
                     const lEnd = new Date(l.end_date);
                     return l.employee_id === emp.employee_id && curr >= lStart && curr <= lEnd;
                 });
-                const isHoliday = holidays.find(h => h.holiday_date.toISOString().split('T')[0] === dateStr);
+                
                 const isWeeklyOff = weeklyOffs.includes(dayName);
 
                 let status = 'Absent';
@@ -159,9 +158,8 @@ class ReportModel {
                     punch_in: punchIn ? punchIn.punch_time : null,
                     punch_out: punchOut ? punchOut.punch_time : null,
                 });
-
-                curr.setDate(curr.getDate() + 1);
             }
+            curr.setDate(curr.getDate() + 1);
         }
 
         return report;
