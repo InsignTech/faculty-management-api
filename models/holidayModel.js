@@ -1,36 +1,86 @@
 const pool = require('../config/db');
 
 class HolidayModel {
-    static async getAll(year = null) {
-        const [rows] = await pool.execute('CALL sp_get_holidays(?)', [year]);
-        return rows[0];
+  // Get all general holidays (employee_id = -1)
+  static async getGeneralHolidays(year) {
+    let query = 'SELECT *, DATE_FORMAT(holiday_start_date, "%Y-%m-%d") as holiday_start_date, DATE_FORMAT(holiday_end_date, "%Y-%m-%d") as holiday_end_date FROM holiday_master WHERE employee_id = -1';
+    const params = [];
+    
+    if (year) {
+      query += ' AND (YEAR(holiday_start_date) = ? OR YEAR(holiday_end_date) = ?)';
+      params.push(year, year);
+    }
+    
+    query += ' ORDER BY holiday_start_date ASC';
+    const [rows] = await pool.query(query, params);
+    return rows;
+  }
+
+  // Get all employee-specific holidays with search and pagination
+  static async getEmployeeHolidays({ search = '', page = 1, limit = 10, year }) {
+    const offset = (page - 1) * limit;
+    let baseQuery = `
+      FROM holiday_master h
+      JOIN employee e ON h.employee_id = e.employee_id
+      WHERE h.employee_id != -1
+    `;
+    const params = [];
+
+    if (year) {
+      baseQuery += ' AND (YEAR(h.holiday_start_date) = ? OR YEAR(h.holiday_end_date) = ?)';
+      params.push(year, year);
     }
 
-    static async save(holidayData) {
-        const { holiday_id, holiday_date, description, is_active } = holidayData;
-        const [rows] = await pool.execute('CALL sp_save_holiday(?, ?, ?, ?)', [
-            holiday_id || 0,
-            holiday_date,
-            description,
-            is_active !== undefined ? is_active : 1
-        ]);
-        return rows[0][0];
+    if (search) {
+      baseQuery += ' AND (e.employee_name LIKE ? OR e.employee_code LIKE ? OR h.holiday_name LIKE ?)';
+      params.push(`%${search}%`, `%${search}%`, `%${search}%`);
     }
 
-    static async delete(id) {
-        const [rows] = await pool.execute('CALL sp_delete_holiday(?)', [id]);
-        return rows[0][0];
-    }
+    const [countResult] = await pool.query(`SELECT COUNT(*) as total ${baseQuery}`, params);
+    const total = countResult[0].total;
 
-    static async getSettings() {
-        const [rows] = await pool.execute('CALL sp_get_attendance_settings()');
-        return rows[0];
-    }
+    const [rows] = await pool.query(`
+      SELECT h.*, DATE_FORMAT(h.holiday_start_date, "%Y-%m-%d") as holiday_start_date, 
+             DATE_FORMAT(h.holiday_end_date, "%Y-%m-%d") as holiday_end_date,
+             e.employee_name, e.employee_code
+      ${baseQuery}
+      ORDER BY h.holiday_start_date DESC
+      LIMIT ? OFFSET ?
+    `, [...params, parseInt(limit), parseInt(offset)]);
 
-    static async updateSetting(key, value) {
-        const [rows] = await pool.execute('CALL sp_update_attendance_setting(?, ?)', [key, value]);
-        return rows[0][0];
+    return { holidays: rows, total };
+  }
+
+  static async saveHoliday(holidayData) {
+    const { 
+      holiday_id, employee_id, holiday_name, holiday_start_date, 
+      holiday_end_date, holiday_type, description, is_active 
+    } = holidayData;
+
+    if (holiday_id) {
+      const [result] = await pool.execute(
+        `UPDATE holiday_master 
+         SET employee_id = ?, holiday_name = ?, holiday_start_date = ?, holiday_end_date = ?, 
+             holiday_type = ?, description = ?, is_active = ?, updated_on = NOW()
+         WHERE holiday_id = ?`,
+        [employee_id, holiday_name, holiday_start_date, holiday_end_date, holiday_type, description, is_active, holiday_id]
+      );
+      return result.affectedRows > 0;
+    } else {
+      const [result] = await pool.execute(
+        `INSERT INTO holiday_master 
+         (employee_id, holiday_name, holiday_start_date, holiday_end_date, holiday_type, description, is_active, created_on)
+         VALUES (?, ?, ?, ?, ?, ?, ?, NOW())`,
+        [employee_id, holiday_name, holiday_start_date, holiday_end_date, holiday_type, description, is_active]
+      );
+      return result.insertId;
     }
+  }
+
+  static async deleteHoliday(id) {
+    const [result] = await pool.execute('DELETE FROM holiday_master WHERE holiday_id = ?', [id]);
+    return result.affectedRows > 0;
+  }
 }
 
 module.exports = HolidayModel;

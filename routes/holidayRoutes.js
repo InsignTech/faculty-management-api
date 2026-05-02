@@ -1,17 +1,20 @@
 const express = require('express');
-const { getHolidays, saveHoliday, deleteHoliday, getSettings, updateSetting } = require('../controllers/holidayController');
+const { 
+  getGeneralHolidays, 
+  getEmployeeHolidays, 
+  saveHoliday, 
+  deleteHoliday 
+} = require('../controllers/holidayController');
 const { protect, authorize } = require('../middleware/auth');
 const router = express.Router();
 
-// All routes are protected and restricted to Admin/Principal
+// All routes are protected and restricted to Admin/Principal/super_admin
 router.use(protect);
+router.use(authorize('Admin', 'Principal', 'super_admin'));
 
-router.get('/', getHolidays);
-router.post('/', authorize('Admin', 'Principal', 'super_admin'), saveHoliday);
-router.delete('/:id', authorize('Admin', 'Principal', 'super_admin'), deleteHoliday);
-
-// Settings routes - Accessible by Admin/Principal
-router.get('/settings', authorize('Admin', 'Principal', 'super_admin'), getSettings);
-router.put('/settings', authorize('Admin', 'Principal', 'super_admin'), updateSetting);
+router.get('/general', getGeneralHolidays);
+router.get('/employees', getEmployeeHolidays);
+router.post('/', saveHoliday);
+router.delete('/:id', deleteHoliday);
 
 module.exports = router;
