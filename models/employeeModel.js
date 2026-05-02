@@ -3,7 +3,30 @@ const bcrypt = require('bcryptjs');
 const UserModel = require('./userModel');
 
 class EmployeeModel {
+  static async getPrincipalId() {
+    try {
+      const [rows] = await pool.query(`
+        SELECT e.employee_id 
+        FROM employee e 
+        JOIN app_role r ON e.role_id = r.role_id 
+        WHERE r.role IN ('Principal', 'principal') 
+        LIMIT 1
+      `);
+      return rows.length > 0 ? rows[0].employee_id : null;
+    } catch (err) {
+      console.error('Error fetching Principal ID:', err);
+      return null;
+    }
+  }
+
   static async create(data) {
+    let reportingManagerId = data.reporting_manager_id || data.manager_id || null;
+
+    // If no manager specified, try to find the Principal
+    if (!reportingManagerId) {
+      reportingManagerId = await this.getPrincipalId();
+    }
+
     const [rows] = await pool.execute(
       'CALL sp_create_employee(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       [
@@ -13,7 +36,7 @@ class EmployeeModel {
         data.email || '',
         data.employee_role || 0,
         data.designation_id || 0,
-        data.reporting_manager_id || null,
+        reportingManagerId,
         data.joining_date || null,
         data.active !== undefined ? data.active : 1,
         data.created_by || 'admin',
@@ -154,32 +177,32 @@ class EmployeeModel {
   }
 
   static async update(id, data) {
-    const [rows] = await pool.execute(
-      'CALL sp_update_employee(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    const [rows] = await pool.query(
+      'CALL sp_update_employee(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       [
         id,
         data.organization_id || 1,
         data.employee_code || '',
         data.employee_name || '',
-        data.email || '',
         data.employee_role || 0,
         data.designation_id || 0,
+        data.employee_type || '',   // ⚠️ you were missing this earlier
         data.reporting_manager_id || null,
         data.joining_date || null,
         data.active !== undefined ? data.active : 1,
         data.modified_by || 'admin',
-        data.department_id || 0,
-        data.basic_pay || 0.00
+        data.department_id || 0
       ]
     );
+
     const result = rows[0][0];
 
-    // Update user account email if provided
+    // Email handled separately ✔
     if (data.email) {
       try {
         await UserModel.updateEmailByEmployeeId(id, data.email);
       } catch (err) {
-        console.error('Failed to sync email to user_accounts:', err.message);
+        console.error('Failed to sync email:', err.message);
       }
     }
 
