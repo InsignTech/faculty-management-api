@@ -65,13 +65,80 @@ class AttendanceModel {
 
     // Request an adjustment (Regularization / On-Duty)
     static async requestAdjustment(data) {
-        const { employee_id, type, date, punch_time, remarks, attachment_path } = data;
+        const { employee_id, type, date, from_date, to_date, punch_time, remarks, attachment_path } = data;
 
-        // 1. Duplicate Check: Block if a request already exists for this date and type
+        // Verify employee is active
+        const [empRows] = await pool.query('SELECT active FROM employee WHERE employee_id = ?', [employee_id]);
+        if (!empRows.length || empRows[0].active === 0) {
+            throw new Error('Adjustment requests can only be submitted for active employees.');
+        }
+
+        // Handle Date Range for On-Duty
+        if (type === 'OnDuty' && from_date && to_date && from_date !== to_date) {
+            const start = new Date(from_date);
+            const end = new Date(to_date);
+            const dates = [];
+            
+            // Loop through dates
+            let current = new Date(start);
+            while (current <= end) {
+                dates.push(current.toISOString().split('T')[0]);
+                current.setDate(current.getDate() + 1);
+            }
+
+            const conn = await pool.getConnection();
+            try {
+                await conn.beginTransaction();
+
+                for (const d of dates) {
+                    // 1. Duplicate Check
+                    const [duplicates] = await conn.query(
+                        `SELECT status FROM attendance_adjustments 
+                         WHERE employee_id = ? AND date = ? AND type = ? AND status IN ('Pending', 'Approved')`,
+                        [employee_id, d, type]
+                    );
+
+                    if (duplicates.length > 0) {
+                        throw new Error(`An On-Duty request already exists for ${d}.`);
+                    }
+
+                    // 2. Presence Validation
+                    const [presence] = await conn.query(
+                        `SELECT 1 FROM attendance WHERE employee_id = ? AND date = ? AND status = 'Present' LIMIT 1`,
+                        [employee_id, d]
+                    );
+
+                    if (presence.length > 0) {
+                        throw new Error(`You are already marked as Present on ${d}. You cannot request On-Duty for this date.`);
+                    }
+
+                    // 3. Insert
+                    await conn.execute(
+                        `INSERT INTO attendance_adjustments 
+                        (employee_id, type, date, punch_time, remarks, attachment_path, status, requested_on) 
+                        VALUES (?, ?, ?, ?, ?, ?, 'Pending', NOW())`,
+                        [employee_id, type, d, punch_time, remarks, attachment_path || null]
+                    );
+                }
+
+                await conn.commit();
+                return { success: true, count: dates.length };
+            } catch (err) {
+                await conn.rollback();
+                throw err;
+            } finally {
+                conn.release();
+            }
+        }
+
+        // Single Date Logic (Regularization or single-day On-Duty)
+        const targetDate = date || from_date;
+
+        // 1. Duplicate Check
         const [duplicates] = await pool.query(
             `SELECT status FROM attendance_adjustments 
              WHERE employee_id = ? AND date = ? AND type = ? AND status IN ('Pending', 'Approved')`,
-            [employee_id, date, type]
+            [employee_id, targetDate, type]
         );
 
         if (duplicates.length > 0) {
@@ -80,28 +147,33 @@ class AttendanceModel {
 
         // 2. Validation for Regularization
         if (type === 'Regularization') {
-            // A. Prevent future regularizations
-            if (new Date(date) > new Date()) {
-                throw new Error('Regularization cannot be requested for future dates. Please use On-Duty for planned external work.');
+            if (new Date(targetDate) > new Date()) {
+                throw new Error('Regularization cannot be requested for future dates.');
             }
 
-            // B. Check if regularization is actually needed
-            // Not needed if: Has both In and Out, both are Present, and neither is Late nor Early Leaving
             const [attendanceRows] = await pool.query(
                 `SELECT type, is_late, is_early_leaving, status 
                  FROM attendance 
                  WHERE employee_id = ? AND date = ?`,
-                [employee_id, date]
+                [employee_id, targetDate]
             );
 
-            // Filter for 'Perfect' punches
             const perfectPunches = attendanceRows.filter(r => 
                 r.status === 'Present' && r.is_late === 0 && r.is_early_leaving === 0
             );
 
-            // If we have at least 2 perfect punches (In and Out), regularization is not needed
             if (perfectPunches.length >= 2) {
-                throw new Error('Attendance is already marked as complete and on-time for this date. Regularization is not required.');
+                throw new Error('Attendance is already marked as complete and on-time for this date.');
+            }
+        } else if (type === 'OnDuty') {
+            // Presence validation for single day On-Duty
+            const [presence] = await pool.query(
+                `SELECT 1 FROM attendance WHERE employee_id = ? AND date = ? AND status = 'Present' LIMIT 1`,
+                [employee_id, targetDate]
+            );
+
+            if (presence.length > 0) {
+                throw new Error(`You are already marked as Present on ${targetDate}. You cannot request On-Duty for this date.`);
             }
         }
 
@@ -109,7 +181,7 @@ class AttendanceModel {
             `INSERT INTO attendance_adjustments 
             (employee_id, type, date, punch_time, remarks, attachment_path, status, requested_on) 
             VALUES (?, ?, ?, ?, ?, ?, 'Pending', NOW())`,
-            [employee_id, type, date, punch_time, remarks, attachment_path || null]
+            [employee_id, type, targetDate, punch_time, remarks, attachment_path || null]
         );
         
         return { adjustment_id: result.insertId };

@@ -43,11 +43,12 @@ BEGIN
     WHERE e.employee_id = p_employee_id;
 END //
 
--- 3. Get Filtered Employees (2 arguments)
+-- 3. Get Filtered Employees (3 arguments)
 DROP PROCEDURE IF EXISTS `sp_get_employees_filtered` //
 CREATE PROCEDURE `sp_get_employees_filtered`(
     IN p_search_term VARCHAR(255),
-    IN p_role_id INT
+    IN p_role_id INT,
+    IN p_active_only TINYINT
 )
 BEGIN
     SELECT 
@@ -64,6 +65,7 @@ BEGIN
     WHERE 
         (p_search_term IS NULL OR p_search_term = '' OR e.employee_name LIKE CONCAT('%', p_search_term, '%') OR e.employee_code LIKE CONCAT('%', p_search_term, '%'))
         AND (p_role_id IS NULL OR p_role_id = 0 OR e.role_id = p_role_id)
+        AND (p_active_only = 0 OR e.active = 1)
     ORDER BY e.employee_id DESC;
 END //
 
@@ -128,6 +130,9 @@ BEGIN
         department_id = p_department_id
     WHERE employee_id = p_employee_id;
 
+    -- SYNC ACTIVE STATUS TO USER ACCOUNT
+    UPDATE user_accounts SET active = p_active WHERE employee_id = p_employee_id;
+
     SELECT ROW_COUNT() AS affected_rows;
 END //
 
@@ -148,6 +153,7 @@ BEGIN
     LEFT JOIN department d ON e.department_id = d.department_id
     WHERE 
         e.employee_id != p_exclude_employee_id
+        AND e.active = 1
         AND (p_search_term IS NULL OR p_search_term = '' OR e.employee_name LIKE CONCAT('%', p_search_term, '%'))
         AND (p_department_id IS NULL OR p_department_id = 0 OR e.department_id = p_department_id)
     ORDER BY e.employee_name ASC;

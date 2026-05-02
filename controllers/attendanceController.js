@@ -66,9 +66,32 @@ const requestAdjustment = async (req, res, next) => {
     try {
         const employeeId = req.user.employeeId;
         if (!employeeId) return next(new ErrorResponse('User is not associated with an employee record', 400, 'MISSING_EMPLOYEE_RECORD'));
-        const { type, date, punch_time, remarks, attachment_path } = req.body;
-        if (!type || !date || !punch_time) return next(new ErrorResponse('type, date and punch_time are required', 400));
-        const result = await AttendanceModel.requestAdjustment({ employee_id: employeeId, type, date, punch_time, remarks, attachment_path });
+        
+        const { type, date, from_date, to_date, punch_time, remarks, attachment_path } = req.body;
+        
+        if (!type || !punch_time) {
+            return next(new ErrorResponse('type and punch_time are required', 400));
+        }
+
+        // Basic validation for dates based on type
+        if (type === 'Regularization' && !date) {
+            return next(new ErrorResponse('date is required for regularization', 400));
+        }
+        if (type === 'OnDuty' && !date && !from_date) {
+            return next(new ErrorResponse('date or from_date is required for On-Duty', 400));
+        }
+
+        const result = await AttendanceModel.requestAdjustment({ 
+            employee_id: employeeId, 
+            type, 
+            date, 
+            from_date, 
+            to_date, 
+            punch_time, 
+            remarks, 
+            attachment_path 
+        });
+        
         sendResponse(res, 201, 'Adjustment request submitted successfully', result);
     } catch (error) { next(error); }
 };

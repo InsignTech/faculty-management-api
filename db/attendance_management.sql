@@ -72,18 +72,19 @@ BEGIN
     -- 1. Process Punch-Ins
     INSERT INTO attendance (employee_id, date, status, punch_type, type, shift_type, punch_time, is_late, deduction_days)
     SELECT 
-        employee_id, 
-        date, 
+        adl.employee_id, 
+        adl.date, 
         'Present', 
         'Biometric', 
         'PunchIn', 
         'Full Day', 
-        MIN(time),
-        IF(MIN(time) > v_grace_in, 1, 0),
-        IF(MIN(time) > v_grace_in, v_deduction_amount, 0.00)
-    FROM attendance_detail_log
-    WHERE date = p_date
-    GROUP BY employee_id, date
+        MIN(adl.time),
+        IF(MIN(adl.time) > v_grace_in, 1, 0),
+        IF(MIN(adl.time) > v_grace_in, v_deduction_amount, 0.00)
+    FROM attendance_detail_log adl
+    INNER JOIN employee e ON adl.employee_id = e.employee_id
+    WHERE adl.date = p_date AND e.active = 1
+    GROUP BY adl.employee_id, adl.date
     ON DUPLICATE KEY UPDATE 
         punch_time = VALUES(punch_time),
         is_late = VALUES(is_late),
@@ -93,18 +94,19 @@ BEGIN
     -- 2. Process Punch-Outs
     INSERT INTO attendance (employee_id, date, status, punch_type, type, shift_type, punch_time, is_early_leaving, deduction_days)
     SELECT 
-        employee_id, 
-        date, 
+        adl.employee_id, 
+        adl.date, 
         'Present', 
         'Biometric', 
         'PunchOut', 
         'Full Day', 
-        MAX(time),
-        IF(MAX(time) < v_early_out, 1, 0),
-        IF(MAX(time) < v_early_out, v_deduction_amount, 0.00)
-    FROM attendance_detail_log
-    WHERE date = p_date
-    GROUP BY employee_id, date
+        MAX(adl.time),
+        IF(MAX(adl.time) < v_early_out, 1, 0),
+        IF(MAX(adl.time) < v_early_out, v_deduction_amount, 0.00)
+    FROM attendance_detail_log adl
+    INNER JOIN employee e ON adl.employee_id = e.employee_id
+    WHERE adl.date = p_date AND e.active = 1
+    GROUP BY adl.employee_id, adl.date
     HAVING COUNT(*) > 1
     ON DUPLICATE KEY UPDATE 
         punch_time = VALUES(punch_time),

@@ -39,7 +39,7 @@ const router = express.Router();
  *       403:
  *         description: Forbidden
  */
-router.post('/', protect, authorize('Admin'), createDepartment);
+router.post('/', protect, authorize('Admin', 'principal'), createDepartment);
 
 /**
  * @swagger
@@ -103,7 +103,7 @@ router.get('/:id', protect, getDepartmentById);
  *       200:
  *         description: Department updated successfully
  */
-router.put('/:id', protect, authorize('Admin'), updateDepartment);
+router.put('/:id', protect, authorize('Admin', 'principal'), updateDepartment);
 
 /**
  * @swagger
@@ -123,6 +123,6 @@ router.put('/:id', protect, authorize('Admin'), updateDepartment);
  *       200:
  *         description: Department deleted successfully
  */
-router.delete('/:id', protect, authorize('Admin'), deleteDepartment);
+router.delete('/:id', protect, authorize('Admin', 'principal'), deleteDepartment);
 
 module.exports = router;

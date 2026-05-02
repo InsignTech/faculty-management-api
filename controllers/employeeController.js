@@ -14,6 +14,11 @@ const createEmployee = async (req, res, next) => {
         return next(new ErrorResponse('Email, Employee Name and Code are mandatory!', 400, 'VALIDATION_ERROR'));
     }
 
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+        return next(new ErrorResponse('Please provide a valid email address!', 400, 'VALIDATION_ERROR'));
+    }
+
     // The account creation is now handled inside EmployeeModel.create
     const result = await EmployeeModel.create(req.body);
     
@@ -96,6 +101,14 @@ const getEmployeeById = async (req, res, next) => {
 
 const updateEmployee = async (req, res, next) => {
   try {
+    const { email } = req.body;
+    if (email) {
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(email)) {
+            return next(new ErrorResponse('Please provide a valid email address!', 400, 'VALIDATION_ERROR'));
+        }
+    }
+
     const result = await EmployeeModel.update(req.params.id, req.body);
     if (result && result.affected_rows === 0) {
       return next(new ErrorResponse('Employee not found', 404, 'NOT_FOUND'));

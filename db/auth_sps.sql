@@ -16,11 +16,14 @@ BEGIN
         ua.email, 
         ua.role_id, 
         ua.employee_id, 
-        ua.active,
+        ua.active AS user_active,
         r.role AS role_name
     FROM user_accounts ua
     LEFT JOIN app_role r ON ua.role_id = r.role_id
-    WHERE ua.email = p_email AND ua.active = 1;
+    LEFT JOIN employee e ON ua.employee_id = e.employee_id
+    WHERE ua.email = p_email 
+      AND ua.active = 1 
+      AND (ua.employee_id IS NULL OR e.active = 1);
 END //
 
 -- Update user OTP

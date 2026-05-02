@@ -29,7 +29,7 @@ class EmployeeModel {
         const defaultPassword = `${data.employee_code || 'User'}@123`;
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(defaultPassword, salt);
-        
+
         await UserModel.signup(
           data.employee_name,
           data.email,
@@ -68,54 +68,74 @@ class EmployeeModel {
     return rows;
   }
 
-  static async getFiltered(searchTerm = '', roleId = 0, limit = 10, offset = 0, managerId = 0) {
+  static async getFiltered(searchTerm = '', roleId = 0, limit = 10, offset = 0, managerId = 0, activeOnly = true) {
     const query = `
-      SELECT 
-          e.*,
-          d.departmentname,
-          r.role AS role_name,
-          des.designation AS designation_name,
-          m.employee_name AS manager_name,
-          mr.role AS manager_role
-      FROM employee e
-      LEFT JOIN department d ON e.department_id = d.department_id
-      LEFT JOIN app_role r ON e.role_id = r.role_id
-      LEFT JOIN designation des ON e.designation_id = des.designation_id
-      LEFT JOIN employee m ON e.reporting_manager_id = m.employee_id
-      LEFT JOIN app_role mr ON m.role_id = mr.role_id
-      WHERE 
-          (? = '' OR e.employee_name LIKE CONCAT('%', ?, '%') OR e.employee_code LIKE CONCAT('%', ?, '%'))
-          AND (? = 0 OR e.role_id = ?)
-          AND (? = 0 OR e.reporting_manager_id = ?)
-      ORDER BY e.employee_id DESC
-      LIMIT ? OFFSET ?
-    `;
+    SELECT 
+        e.*,
+        d.departmentname,
+        r.role AS role_name,
+        des.designation AS designation_name,
+        m.employee_name AS manager_name,
+        mr.role AS manager_role
+    FROM employee e
+    LEFT JOIN department d ON e.department_id = d.department_id
+    LEFT JOIN app_role r ON e.role_id = r.role_id
+    LEFT JOIN designation des ON e.designation_id = des.designation_id
+    LEFT JOIN employee m ON e.reporting_manager_id = m.employee_id
+    LEFT JOIN app_role mr ON m.role_id = mr.role_id
+    WHERE 
+        (? = '' OR e.employee_name LIKE ? OR e.employee_code LIKE ?)
+        AND (? = 0 OR e.role_id = ?)
+        AND (? = 0 OR e.reporting_manager_id = ?)
+        AND (? = 0 OR e.active = 1)
+    ORDER BY e.employee_id DESC
+    LIMIT ? OFFSET ?
+  `;
+
     const term = searchTerm || '';
-    const rId = roleId || 0;
-    const mId = managerId || 0;
-    const [rows] = await pool.execute(query, [
-        term, term, term, 
-        rId, rId, 
-        mId, mId,
-        limit.toString(), 
-        offset.toString()
+    const likeTerm = `%${term}%`;
+    const rId = parseInt(roleId) || 0;
+    const mId = parseInt(managerId) || 0;
+    const aOnly = activeOnly ? 1 : 0;
+    const v_limit = parseInt(limit) || 10;
+    const v_offset = parseInt(offset) || 0;
+
+    const [rows] = await pool.query(query, [
+      term, likeTerm, likeTerm,
+      rId, rId,
+      mId, mId,
+      aOnly,
+      v_limit,
+      v_offset
     ]);
+
     return rows;
   }
 
-  static async getTotalCount(searchTerm = '', roleId = 0, managerId = 0) {
+  static async getTotalCount(searchTerm = '', roleId = 0, managerId = 0, activeOnly = true) {
     const query = `
-      SELECT COUNT(*) as total
-      FROM employee e
-      WHERE 
-          (? = '' OR e.employee_name LIKE CONCAT('%', ?, '%') OR e.employee_code LIKE CONCAT('%', ?, '%'))
-          AND (? = 0 OR e.role_id = ?)
-          AND (? = 0 OR e.reporting_manager_id = ?)
-    `;
+    SELECT COUNT(*) as total
+    FROM employee e
+    WHERE 
+        (? = '' OR e.employee_name LIKE ? OR e.employee_code LIKE ?)
+        AND (? = 0 OR e.role_id = ?)
+        AND (? = 0 OR e.reporting_manager_id = ?)
+        AND (? = 0 OR e.active = 1)
+  `;
+
     const term = searchTerm || '';
-    const rId = roleId || 0;
-    const mId = managerId || 0;
-    const [rows] = await pool.execute(query, [term, term, term, rId, rId, mId, mId]);
+    const likeTerm = `%${term}%`;
+    const rId = parseInt(roleId) || 0;
+    const mId = parseInt(managerId) || 0;
+    const aOnly = activeOnly ? 1 : 0;
+
+    const [rows] = await pool.query(query, [
+      term, likeTerm, likeTerm,
+      rId, rId,
+      mId, mId,
+      aOnly
+    ]);
+
     return rows[0].total;
   }
 
@@ -170,7 +190,7 @@ class EmployeeModel {
     await pool.execute('CALL sp_delete_employee(?)', [id]);
     return true;
   }
-  
+
   static async updateReportingManager(id, managerId) {
     const [result] = await pool.execute(
       'UPDATE employee SET reporting_manager_id = ? WHERE employee_id = ?',
