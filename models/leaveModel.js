@@ -1,75 +1,127 @@
 const pool = require('../config/db');
+const LeaveRequestModel = require('./leaveRequestModel');
 
 class LeaveModel {
     /**
-     * Get leave balance for an employee (current year)
+     * Get leave balance for an employee
+     * Delegates to LeaveRequestModel which has the verified balance engine
+     * (carry-forward, monthly accumulation, hierarchy).
      */
-    static async getBalance(employeeId, year) {
-        const [rows] = await pool.execute(
-            'CALL sp_get_leave_balance(?, ?)',
-            [employeeId, year || new Date().getFullYear()]
-        );
-        return rows[0];
+    static async getBalance(employeeId) {
+        return LeaveRequestModel.getLeaveBalance(employeeId);
     }
 
     /**
-     * Get leave types available for an employee based on their active policy
+     * Get leave types available for an employee based on their active policy.
+     * Returns the leave type names from the effective merged policy.
      */
     static async getAvailableTypes(employeeId) {
-        const [rows] = await pool.execute(
-            'CALL sp_get_leave_types_by_policy(?)',
-            [employeeId]
-        );
-        return rows[0];
+        const balance = await LeaveRequestModel.getLeaveBalance(employeeId);
+        // Return just the type names and available days for dropdown consumption
+        return balance.map(b => ({
+            leave_type: b.leaveType,
+            available: b.available,
+            strategy: b.strategy
+        }));
     }
 
     /**
-     * Apply for a new leave
+     * Apply for a new leave — uses the verified sp_apply_leave procedure.
+     * NOTE: sp_apply_leave signature is:
+     *   (employee_id, leave_type, start_date, end_date, half_type, reason, attachment)
      */
     static async apply(data) {
-        const { employee_id, leave_type, start_date, end_date, total_days, reason, attachment_path } = data;
+        const {
+            employee_id,
+            leave_type,
+            start_date,
+            end_date,
+            leave_half_type,
+            reason,
+            attachment_path
+        } = data;
         const [rows] = await pool.execute(
             'CALL sp_apply_leave(?, ?, ?, ?, ?, ?, ?)',
-            [employee_id, leave_type, start_date, end_date, total_days, reason, attachment_path || null]
+            [
+                employee_id,
+                leave_type,
+                start_date,
+                end_date,
+                leave_half_type || 'FullDay',
+                reason,
+                attachment_path || null
+            ]
         );
         return rows[0][0];
     }
 
     /**
-     * Get employee's own requests
+     * Get employee's own leave requests (direct SQL, no broken SP dependency).
      */
     static async getMyRequests(employeeId) {
         const [rows] = await pool.execute(
-            'CALL sp_get_employee_leave_requests(?)',
+            `SELECT lr.*
+             FROM leave_requests lr
+             WHERE lr.employee_id = ?
+             ORDER BY lr.applied_on DESC`,
             [employeeId]
         );
-        return rows[0];
+        return rows;
     }
 
     /**
-     * Get subordinate requests for approval
+     * Get subordinate requests for approval.
+     * managerId = null → Admin view (all requests)
+     * managerId = <id>  → Manager view (only their direct reports)
      */
     static async getApprovals(managerId, status) {
-        const [rows] = await pool.execute(
-            'CALL sp_get_subordinate_leave_requests(?, ?)',
-            [managerId, status || 'Pending']
-        );
-        return rows[0];
+        let sql = `
+            SELECT
+                lr.*,
+                e.employee_name,
+                e.employee_code  AS emp_code,
+                e.designation_id,
+                d.departmentname AS department_name
+            FROM leave_requests lr
+            JOIN employee e ON lr.employee_id = e.employee_id
+            LEFT JOIN department d ON e.department_id = d.department_id
+            WHERE 1=1
+        `;
+        const params = [];
+
+        if (managerId) {
+            sql += ' AND e.reporting_manager_id = ?';
+            params.push(managerId);
+        }
+
+        if (status && status !== 'All') {
+            sql += ' AND lr.status = ?';
+            params.push(status);
+        }
+
+        sql += ' ORDER BY lr.applied_on DESC';
+
+        const [rows] = await pool.execute(sql, params);
+        return rows;
     }
 
     /**
-     * Approve or Reject a leave request
+     * Approve or Reject a leave request.
+     * Uses the verified sp_approve_leave which also syncs attendance_daily.
      */
     static async action(requestId, status, approverId, remarks) {
+        if (!['Approved', 'Rejected'].includes(status)) {
+            throw new Error('Invalid status: must be Approved or Rejected');
+        }
         const [rows] = await pool.execute(
-            'CALL sp_action_leave_request(?, ?, ?, ?)',
-            [requestId, status, approverId, remarks || null]
+            'CALL sp_approve_leave(?, ?, ?, ?)',
+            [requestId, approverId, status, remarks || null]
         );
         return rows[0][0];
     }
 
     /**
-     * Delete a pending leave request (Ownership check included)
+     * Delete a pending leave request (only the owner can delete, only if Pending).
      */
     static async delete(requestId, employeeId) {
         const [result] = await pool.execute(
