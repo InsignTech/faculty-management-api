@@ -62,7 +62,12 @@ const exportAttendanceReport = async (req, res, next) => {
             'Status': row.status,
             'Remark': row.remark,
             'Punch In': row.punch_in || '-',
-            'Punch Out': row.punch_out || '-'
+            'Punch Out': row.punch_out || '-',
+            'Worked (Mins)': row.worked_mins || 0,
+            'Late (Mins)': row.late_minutes || 0,
+            'Early Leaving (Mins)': row.early_minutes || 0,
+            'Overtime (Mins)': row.overtime_minutes || 0,
+            'Deduction (Days)': row.deduction_days || 0
         }));
 
         const wb = XLSX.utils.book_new();

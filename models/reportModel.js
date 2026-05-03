@@ -123,11 +123,13 @@ class ReportModel {
                     const hasPunchIn = dayAttendance.first_in_time;
                     const hasPunchOut = dayAttendance.last_out_time;
 
-                    // 🔥 PRIORITY: Incomplete punch = Absent
-                    if (!hasPunchIn || !hasPunchOut) {
+                    // 🔥 PRIORITY: Regularized, then Incomplete punch = Absent
+                    if (dayAttendance.is_regularized) {
+                        status = 'Regularized';
+                    } else if (!hasPunchIn || !hasPunchOut) {
                         status = 'Absent';
-                    } else if (dayAttendance.is_late === 1) {
-                        status = 'Late';
+                    } else if (dayAttendance.is_late === 1 || dayAttendance.is_early_leaving === 1) {
+                        status = 'Regularization Required';
                     } else {
                         status = 'Present';
                     }
@@ -153,6 +155,13 @@ class ReportModel {
                     remark: remark,
                     punch_in: dayAttendance ? dayAttendance.first_in_time : null,
                     punch_out: dayAttendance ? dayAttendance.last_out_time : null,
+                    worked_mins: dayAttendance ? dayAttendance.worked_mins : 0,
+                    late_minutes: dayAttendance ? dayAttendance.late_minutes : 0,
+                    early_minutes: dayAttendance ? dayAttendance.early_minutes : 0,
+                    overtime_minutes: dayAttendance ? dayAttendance.overtime_minutes : 0,
+                    deduction_days: dayAttendance ? parseFloat(dayAttendance.deduction_days) : (status === 'Absent' ? 1.00 : 0.00),
+                    shift_type: dayAttendance ? dayAttendance.shift_type : null,
+                    is_regularized: dayAttendance ? dayAttendance.is_regularized : 0
                 });
             }
             curr.setDate(curr.getDate() + 1);
