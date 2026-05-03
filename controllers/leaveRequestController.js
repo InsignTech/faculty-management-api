@@ -1,5 +1,6 @@
 const LeaveRequestModel = require('../models/leaveRequestModel');
 const { sendResponse } = require('../utils/responseHelper');
+const pool = require('../config/db');
 
 const getLeaveRequests = async (req, res, next) => {
   try {
@@ -63,10 +64,68 @@ const getTeamRequests = async (req, res, next) => {
   }
 };
 
+const checkHolidays = async (req, res, next) => {
+  try {
+    const { start_date, end_date, employee_id } = req.query;
+    if (!start_date || !end_date) {
+      return sendResponse(res, 400, 'start_date and end_date are required', []);
+    }
+    const empId = employee_id || req.user?.employeeId || -1;
+    const [rows] = await pool.execute(
+      `SELECT holiday_name, holiday_type,
+              DATE_FORMAT(holiday_start_date, '%Y-%m-%d') AS holiday_start_date,
+              DATE_FORMAT(holiday_end_date, '%Y-%m-%d') AS holiday_end_date
+       FROM holiday_master
+       WHERE is_active = 1
+         AND (employee_id = -1 OR employee_id = ?)
+         AND holiday_type != 'WeekEnd'
+         AND holiday_start_date <= ? AND holiday_end_date >= ?`,
+      [empId, end_date, start_date]
+    );
+    sendResponse(res, 200, 'Holidays fetched', rows);
+  } catch (error) {
+    next(error);
+  }
+};
+
+const cancelLeaveRequest = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const employeeId = req.user?.employeeId;
+
+    // Only allow cancellation of own pending requests
+    const [rows] = await pool.execute(
+      'SELECT status, employee_id FROM leave_requests WHERE leave_request_id = ?',
+      [id]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Leave request not found' });
+    }
+
+    const request = rows[0];
+
+    if (request.employee_id !== employeeId) {
+      return res.status(403).json({ success: false, message: 'You can only cancel your own requests' });
+    }
+
+    if (request.status !== 'Pending') {
+      return res.status(400).json({ success: false, message: `Cannot cancel a request that is already ${request.status}` });
+    }
+
+    await pool.execute('DELETE FROM leave_requests WHERE leave_request_id = ?', [id]);
+    sendResponse(res, 200, 'Leave request cancelled successfully');
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getLeaveRequests,
   createLeaveRequest,
   getTeamRequests,
   updateRequestStatus,
-  getEmployeeBalance
+  getEmployeeBalance,
+  checkHolidays,
+  cancelLeaveRequest
 };
