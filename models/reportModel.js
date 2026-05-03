@@ -53,7 +53,7 @@ class ReportModel {
         // 2. Fetch all raw data for the range
         // Attendance
         const [attendance] = await pool.execute(
-            `SELECT * FROM attendance WHERE date BETWEEN ? AND ?`,
+            `SELECT * FROM attendance_daily WHERE date BETWEEN ? AND ?`,
             [startDate, endDate]
         );
 
@@ -101,13 +101,10 @@ class ReportModel {
                     sysWO.weekly_off || '["Sunday"]'
                 );
 
-                const dayAttendance = attendance.filter(a =>
+                const dayAttendance = attendance.find(a =>
                     a.employee_id === emp.employee_id &&
                     a.date.toISOString().split('T')[0] === dateStr
                 );
-
-                const punchIn = dayAttendance.find(a => a.type === 'PunchIn');
-                const punchOut = dayAttendance.find(a => a.type === 'PunchOut');
 
                 const empLeave = leaves.find(l => {
                     const lStart = new Date(l.start_date);
@@ -120,17 +117,16 @@ class ReportModel {
                 let status = 'Absent';
                 let remark = '';
 
-                if (dayAttendance.length > 0) {
-                    const anyLate = dayAttendance.some(a => a.is_late === 1);
-                    const isOnduty = dayAttendance.some(a => a.type === 'Onduty');
+                if (dayAttendance) {
+                    const isOnduty = dayAttendance.is_regularize_type === 'OnDuty';
 
-                    const hasPunchIn = punchIn && punchIn.punch_time;
-                    const hasPunchOut = punchOut && punchOut.punch_time;
+                    const hasPunchIn = dayAttendance.first_in_time;
+                    const hasPunchOut = dayAttendance.last_out_time;
 
                     // 🔥 PRIORITY: Incomplete punch = Absent
                     if (!hasPunchIn || !hasPunchOut) {
                         status = 'Absent';
-                    } else if (anyLate) {
+                    } else if (dayAttendance.is_late === 1) {
                         status = 'Late';
                     } else {
                         status = 'Present';
@@ -155,8 +151,8 @@ class ReportModel {
                     date: dateStr,
                     status: status,
                     remark: remark,
-                    punch_in: punchIn ? punchIn.punch_time : null,
-                    punch_out: punchOut ? punchOut.punch_time : null,
+                    punch_in: dayAttendance ? dayAttendance.first_in_time : null,
+                    punch_out: dayAttendance ? dayAttendance.last_out_time : null,
                 });
             }
             curr.setDate(curr.getDate() + 1);

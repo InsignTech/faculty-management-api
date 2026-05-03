@@ -62,6 +62,19 @@ const getMyAttendanceSummary = async (req, res, next) => {
     } catch (error) { next(error); }
 };
 
+const getIrregularDays = async (req, res, next) => {
+    try {
+        const employeeId = req.user.employeeId;
+        if (!employeeId) return next(new ErrorResponse('User is not associated with an employee record', 400, 'MISSING_EMPLOYEE_RECORD'));
+
+        const month = req.query.month || new Date().getMonth() + 1;
+        const year = req.query.year || new Date().getFullYear();
+        
+        const irregular = await AttendanceModel.getIrregularAttendance(employeeId, month, year);
+        sendResponse(res, 200, 'Irregular attendance days fetched', irregular);
+    } catch (error) { next(error); }
+};
+
 const requestAdjustment = async (req, res, next) => {
     try {
         const employeeId = req.user.employeeId;
@@ -240,6 +253,7 @@ module.exports = {
     processAttendanceLogs,
     getMyAttendance,
     getMyAttendanceSummary,
+    getIrregularDays,
     requestAdjustment,
     getMyAdjustments,
     getPendingAdjustments,

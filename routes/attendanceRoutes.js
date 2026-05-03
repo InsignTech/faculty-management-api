@@ -3,6 +3,7 @@ const {
     processAttendanceLogs, 
     getMyAttendance, 
     getMyAttendanceSummary,
+    getIrregularDays,
     requestAdjustment, 
     getMyAdjustments,
     getPendingAdjustments,
@@ -23,6 +24,7 @@ router.use(protect);
 router.post('/process-logs', authorize('Admin'), processAttendanceLogs); 
 router.get('/my-attendance', getMyAttendance);
 router.get('/my-summary', getMyAttendanceSummary);
+router.get('/irregular-days', getIrregularDays);
 router.post('/adjustments', requestAdjustment);
 router.get('/my-adjustments', getMyAdjustments);
 router.delete('/adjustments/:id', deleteAdjustment);

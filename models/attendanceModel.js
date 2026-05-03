@@ -10,7 +10,7 @@ class AttendanceModel {
 
     // Process raw logs for all missing dates up to today
     static async processMissedLogs() {
-        const [rows] = await pool.query("SELECT MAX(date) as latest_date FROM attendance");
+        const [rows] = await pool.query("SELECT MAX(date) as latest_date FROM attendance_daily");
         let latestDate = rows[0].latest_date;
         
         let startDate;
@@ -57,10 +57,16 @@ class AttendanceModel {
         return rows[0];
     }
 
-    // Get monthly attendance summary (late count, deductions, etc.)
+    // Get attendance summary (late count, deductions, etc.)
     static async getAttendanceSummary(employeeId, month, year) {
         const [rows] = await pool.execute('CALL sp_get_attendance_summary(?, ?, ?)', [employeeId, month, year]);
         return rows[0][0];
+    }
+
+    // Get irregular attendance days (with deductions) for regularization
+    static async getIrregularAttendance(employeeId, month, year) {
+        const [rows] = await pool.execute('CALL sp_get_irregular_attendance(?, ?, ?)', [employeeId, month, year]);
+        return rows[0];
     }
 
     // Request an adjustment (Regularization / On-Duty)
@@ -104,7 +110,7 @@ class AttendanceModel {
 
                     // 2. Presence Validation
                     const [presence] = await conn.query(
-                        `SELECT 1 FROM attendance WHERE employee_id = ? AND date = ? AND status = 'Present' LIMIT 1`,
+                        `SELECT 1 FROM attendance_daily WHERE employee_id = ? AND date = ? AND status = 'Present' LIMIT 1`,
                         [employee_id, d]
                     );
 
@@ -152,23 +158,23 @@ class AttendanceModel {
             }
 
             const [attendanceRows] = await pool.query(
-                `SELECT type, is_late, is_early_leaving, status 
-                 FROM attendance 
+                `SELECT is_late, is_early_leaving, status, first_in_time, last_out_time 
+                 FROM attendance_daily 
                  WHERE employee_id = ? AND date = ?`,
                 [employee_id, targetDate]
             );
 
-            const perfectPunches = attendanceRows.filter(r => 
-                r.status === 'Present' && r.is_late === 0 && r.is_early_leaving === 0
-            );
-
-            if (perfectPunches.length >= 2) {
-                throw new Error('Attendance is already marked as complete and on-time for this date.');
+            if (attendanceRows.length > 0) {
+                const day = attendanceRows[0];
+                const isComplete = day.status === 'Present' && day.first_in_time && day.last_out_time && day.is_late === 0 && day.is_early_leaving === 0;
+                if (isComplete) {
+                    throw new Error('Attendance is already marked as complete and on-time for this date.');
+                }
             }
         } else if (type === 'OnDuty') {
             // Presence validation for single day On-Duty
             const [presence] = await pool.query(
-                `SELECT 1 FROM attendance WHERE employee_id = ? AND date = ? AND status = 'Present' LIMIT 1`,
+                `SELECT 1 FROM attendance_daily WHERE employee_id = ? AND date = ? AND status = 'Present' LIMIT 1`,
                 [employee_id, targetDate]
             );
 
@@ -240,28 +246,20 @@ class AttendanceModel {
                 const deduction = approvedCount < limit ? 0.00 : 0.50;
 
                 await conn.execute(
-                    `UPDATE attendance 
-                     SET is_regularized = 1, deduction_days = ?, status = 'Present'
+                    `UPDATE attendance_daily 
+                     SET is_regularized = 1, deduction_days = ?, status = 'Present', is_regularize_type = 'Regularization'
                      WHERE employee_id = ? AND date = ?`,
                     [deduction, adj.employee_id, adj.date]
                 );
             } else if (adj.type === 'OnDuty') {
-                // Insert/Update standard logs for On-Duty
-                const shifts = [
-                    { type: 'PunchIn', time: '09:00:00' },
-                    { type: 'PunchOut', time: '17:00:00' }
-                ];
-
-                for (const shift of shifts) {
-                    await conn.execute(
-                        `INSERT INTO attendance 
-                         (employee_id, date, status, punch_type, type, shift_type, punch_time, is_regularized, deduction_days)
-                         VALUES (?, ?, 'Present', 'Onduty', ?, 'Full Day', ?, 1, 0.00)
-                         ON DUPLICATE KEY UPDATE 
-                             status = 'Present', punch_type = 'Onduty', punch_time = ?, is_regularized = 1, deduction_days = 0.00`,
-                        [adj.employee_id, adj.date, shift.type, shift.time, shift.time]
-                    );
-                }
+                // Update attendance_daily for On-Duty
+                await conn.execute(
+                    `UPDATE attendance_daily 
+                     SET status = 'Present', first_in_time = '09:00:00', last_out_time = '17:00:00', 
+                         is_regularized = 1, deduction_days = 0.00, is_regularize_type = 'OnDuty'
+                     WHERE employee_id = ? AND date = ?`,
+                    [adj.employee_id, adj.date]
+                );
             }
 
             await conn.commit();
