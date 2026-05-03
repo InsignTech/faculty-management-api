@@ -28,7 +28,7 @@ const getLeaveTypes = async (req, res, next) => {
 // @access  Private
 const applyLeave = async (req, res, next) => {
     try {
-        const { leave_type, start_date, end_date, total_days, reason, attachment_path } = req.body;
+        const { leave_type, start_date, end_date, total_days, leave_half_type, reason, attachment_path } = req.body;
         
         if (!leave_type || !start_date || !end_date || !total_days) {
             return next(new ErrorResponse('Please provide all required fields', 400));
@@ -40,6 +40,7 @@ const applyLeave = async (req, res, next) => {
             start_date,
             end_date,
             total_days,
+            leave_half_type,
             reason,
             attachment_path
         });

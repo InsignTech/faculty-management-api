@@ -38,8 +38,12 @@ class LeaveModel {
             end_date,
             leave_half_type,
             reason,
-            attachment_path
+            attachment_path,
+            total_days
         } = data;
+
+        const halfType = leave_half_type || 'FullDay';
+
         const [rows] = await pool.execute(
             'CALL sp_apply_leave(?, ?, ?, ?, ?, ?, ?)',
             [
@@ -47,12 +51,30 @@ class LeaveModel {
                 leave_type,
                 start_date,
                 end_date,
-                leave_half_type || 'FullDay',
+                halfType,
                 reason,
                 attachment_path || null
             ]
         );
-        return rows[0][0];
+        
+        const result = rows[0][0];
+
+        // Safety net for half-days
+        if (result && result.leave_request_id && (!result.total_days || result.total_days == 0)) {
+            if (halfType !== 'FullDay') {
+                await pool.execute(
+                    'UPDATE leave_requests SET total_days = 0.5 WHERE leave_request_id = ?',
+                    [result.leave_request_id]
+                );
+            } else if (total_days > 0) {
+                await pool.execute(
+                    'UPDATE leave_requests SET total_days = ? WHERE leave_request_id = ?',
+                    [total_days, result.leave_request_id]
+                );
+            }
+        }
+
+        return result;
     }
 
     /**

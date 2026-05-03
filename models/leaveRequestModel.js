@@ -39,7 +39,11 @@ class LeaveRequestModel {
   }
 
   static create = async (data) => {
-    const { employee_id, leave_type, start_date, end_date, leave_half_type, reason, attachment_path } = data;
+    const { employee_id, leave_type, start_date, end_date, leave_half_type, reason, attachment_path, total_days } = data;
+    
+    // Explicitly pass leave_half_type (defaults to FullDay)
+    const halfType = leave_half_type || 'FullDay';
+
     const [rows] = await pool.execute(
       'CALL sp_apply_leave(?, ?, ?, ?, ?, ?, ?)',
       [
@@ -47,13 +51,32 @@ class LeaveRequestModel {
         leave_type,
         start_date,
         end_date,
-        leave_half_type || 'FullDay',
+        halfType,
         reason,
         attachment_path || null
       ]
     );
-    // The SP returns a result set with leave_request_id, total_days, and status
-    return rows[0][0];
+    
+    const result = rows[0][0];
+
+    // Double check: if the database somehow didn't update total_days (e.g. old SP version), 
+    // we force it if it's a half day and total_days is 0.
+    if (result && result.leave_request_id && (!result.total_days || result.total_days == 0)) {
+       if (halfType !== 'FullDay') {
+          await pool.execute(
+            'UPDATE leave_requests SET total_days = 0.5 WHERE leave_request_id = ?',
+            [result.leave_request_id]
+          );
+       } else if (total_days > 0) {
+          // If frontend sent a valid total_days for FullDay, use it
+          await pool.execute(
+            'UPDATE leave_requests SET total_days = ? WHERE leave_request_id = ?',
+            [total_days, result.leave_request_id]
+          );
+       }
+    }
+
+    return result;
   };
 
   static async getById(id) {
@@ -88,24 +111,30 @@ class LeaveRequestModel {
     const policyStart = new Date(policy.start_date);
     const policyEnd = policy.end_date ? new Date(policy.end_date) : null;
 
-    // 2. Get leaves used in current policy period
+    const policyYear = policyStart.getFullYear();
+
+    // 2. Get leaves used in current policy year — split by status.
+    // Using YEAR() instead of strict date range to avoid UTC/IST timezone shifts
+    // where a Jan 1 IST leave gets stored as Dec 31 UTC and gets excluded.
     const [leavesTaken] = await pool.execute(
-      `SELECT leave_type, SUM(total_days) as taken 
+      `SELECT leave_type, status, SUM(total_days) as taken 
        FROM leave_requests 
        WHERE employee_id = ? 
-         AND status = 'Approved' 
-         AND start_date >= ?
-         ${policyEnd ? 'AND end_date <= ?' : ''}
-       GROUP BY leave_type`,
-      policyEnd
-        ? [employeeId, policy.start_date, policy.end_date]
-        : [employeeId, policy.start_date]
+         AND status IN ('Approved', 'Pending')
+         AND YEAR(start_date) = ?
+       GROUP BY leave_type, status`,
+      [employeeId, policyYear]
     );
 
-    const takenMap = leavesTaken.reduce((acc, curr) => {
-      acc[curr.leave_type] = parseFloat(curr.taken);
-      return acc;
-    }, {});
+    // Build separate maps for approved and pending
+    // Use += accumulation to safely handle multiple rows per type
+    const approvedMap = {};
+    const pendingMap = {};
+    leavesTaken.forEach(row => {
+      const days = parseFloat(row.taken) || 0;
+      if (row.status === 'Approved') approvedMap[row.leave_type] = (approvedMap[row.leave_type] || 0) + days;
+      if (row.status === 'Pending')  pendingMap[row.leave_type]  = (pendingMap[row.leave_type]  || 0) + days;
+    });
 
     // 3. Get carry-forward from the PREVIOUS policy period (if applicable)
     // Find the prior active policy that ended before this one started
@@ -161,17 +190,21 @@ class LeaveRequestModel {
 
       // Add carry-forward on top, capped so total doesn't exceed leaveCount * 2
       const carried = carryForwardMap[item.leaveType] || 0;
-      const maxWithCarry = parseFloat(item.leaveCount) * 2; // sensible cap
+      const maxWithCarry = parseFloat(item.leaveCount) * 2;
       const effectiveAllocated = Math.min(allocated + carried, maxWithCarry);
 
-      const used = takenMap[item.leaveType] || 0;
+      const approved = approvedMap[item.leaveType] || 0;
+      const pending  = pendingMap[item.leaveType]  || 0;
+      const totalDeducted = approved + pending;
+
       return {
         leaveType: item.leaveType,
         totalAllocated: parseFloat(item.leaveCount),
         carryForward: carried,
         currentlyEarned: effectiveAllocated,
-        used: used,
-        available: Math.max(0, effectiveAllocated - used),
+        used: approved,           // Only approved leaves count as "used"
+        pending: pending,         // Pending days reserved but not yet confirmed
+        available: Math.max(0, effectiveAllocated - totalDeducted), // Pending reserves days
         strategy: item.cappingType
       };
     });
