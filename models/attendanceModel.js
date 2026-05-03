@@ -12,12 +12,12 @@ class AttendanceModel {
     static async processMissedLogs() {
         const [rows] = await pool.query("SELECT MAX(date) as latest_date FROM attendance_daily");
         let latestDate = rows[0].latest_date;
-        
+
         let startDate;
         if (!latestDate) {
             const [minLog] = await pool.query("SELECT DATE(MIN(punch_time)) as min_date FROM attendance_detail_log");
             if (!minLog[0].min_date) {
-                return { total_processed: 0, days_processed: 0 }; 
+                return { total_processed: 0, days_processed: 0 };
             }
             startDate = new Date(minLog[0].min_date);
         } else {
@@ -28,7 +28,7 @@ class AttendanceModel {
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         startDate.setHours(0, 0, 0, 0);
-        
+
         let currentDate = startDate;
         let totalProcessed = 0;
         let daysProcessed = 0;
@@ -38,16 +38,16 @@ class AttendanceModel {
             const month = String(currentDate.getMonth() + 1).padStart(2, '0');
             const day = String(currentDate.getDate()).padStart(2, '0');
             const localISOTime = `${year}-${month}-${day}`;
-            
+
             const [resultRows] = await pool.execute('CALL sp_process_attendance_logs(?)', [localISOTime]);
             const rowsProcessed = resultRows[0][0]?.processed_rows || 0;
-            
+
             totalProcessed += rowsProcessed;
             daysProcessed++;
-            
+
             currentDate.setDate(currentDate.getDate() + 1);
         }
-        
+
         return { total_processed: totalProcessed, days_processed: daysProcessed };
     }
 
@@ -65,7 +65,9 @@ class AttendanceModel {
 
     // Get irregular attendance days (with deductions) for regularization
     static async getIrregularAttendance(employeeId, month, year) {
+        console.log(employeeId, month, year)
         const [rows] = await pool.execute('CALL sp_get_irregular_attendance(?, ?, ?)', [employeeId, month, year]);
+        console.log(rows[0])
         return rows[0];
     }
 
@@ -84,7 +86,7 @@ class AttendanceModel {
             const start = new Date(from_date);
             const end = new Date(to_date);
             const dates = [];
-            
+
             // Loop through dates
             let current = new Date(start);
             while (current <= end) {
@@ -189,7 +191,7 @@ class AttendanceModel {
             VALUES (?, ?, ?, ?, ?, ?, 'Pending', NOW())`,
             [employee_id, type, targetDate, punch_time, remarks, attachment_path || null]
         );
-        
+
         return { adjustment_id: result.insertId };
     }
 
@@ -229,9 +231,9 @@ class AttendanceModel {
                      AND adjustment_id != ?`,
                     [adj.employee_id, v_month, v_year, adjustmentId]
                 );
-                
+
                 const approvedCount = countRows[0].approved_count;
-                
+
                 // Fetch dynamic regularization limit from settings
                 let limit = 3;
                 try {
@@ -388,10 +390,10 @@ class AttendanceModel {
         // Prepare bulk insert values
         // Expecting logs to be [{ employee_id: 123, punch_time: '2024-04-04 09:00:00' }, ...]
         const values = logs.map(log => [log.employee_id, log.punch_time]);
-        
+
         const query = 'INSERT IGNORE INTO attendance_detail_log (employee_id, punch_time) VALUES ?';
         const [result] = await pool.query(query, [values]);
-        
+
         return result.affectedRows;
     }
 }
