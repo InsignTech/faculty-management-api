@@ -1,13 +1,12 @@
 const express = require('express');
-const { getLeaveBalance, applyLeave, getEmployeeLeaves } = require('../controllers/leaveRequestController');
+const { getLeaveRequests, updateRequestStatus, getEmployeeBalance } = require('../controllers/leaveRequestController');
 const { protect } = require('../middleware/auth');
 const router = express.Router();
 
-// All routes are protected
 router.use(protect);
 
-router.get('/balance', getLeaveBalance);
-router.post('/apply', applyLeave);
-router.get('/my-leaves', getEmployeeLeaves);
+router.get('/', getLeaveRequests);
+router.put('/:id/status', updateRequestStatus);
+router.get('/balance/:employeeId', getEmployeeBalance);
 
 module.exports = router;

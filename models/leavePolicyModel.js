@@ -140,15 +140,25 @@ class LeavePolicyModel {
     if (empRows.length === 0) return null;
     const roleId = empRows[0].role_id;
 
-    // 2. Fetch all levels
-    const [globalPolicy] = await pool.execute('SELECT policy_value FROM leave_policy WHERE active = 1 LIMIT 1');
-    const [rolePolicy] = await pool.execute('SELECT policy_value FROM leave_policy_role WHERE role_id = ? AND active = 1', [roleId]);
-    const [empPolicy] = await pool.execute('SELECT policy_value FROM leave_policy_employee WHERE employee_id = ? AND active = 1', [employeeId]);
+    // 2. Fetch the most relevant Global Policy
+    // Priority: Active = 1, otherwise the one that covers the current date
+    const [globalPolicies] = await pool.execute(`
+      SELECT *, policy_value 
+      FROM leave_policy 
+      WHERE active = 1 
+      OR (CURDATE() BETWEEN start_date AND COALESCE(end_date, '9999-12-31'))
+      ORDER BY active DESC, start_date DESC 
+      LIMIT 1
+    `);
 
-    const mergePolicies = (base, overrides) => {
-      const baseArr = base ? JSON.parse(base) : [];
-      const overArr = overrides ? JSON.parse(overrides) : [];
-      
+    if (globalPolicies.length === 0) return null;
+    const globalPolicy = globalPolicies[0];
+
+    // 3. Fetch overrides
+    const [rolePolicy] = await pool.execute('SELECT policy_value FROM leave_policy_role WHERE role_id = ? AND leave_policy_id = ?', [roleId, globalPolicy.leave_policy_id]);
+    const [empPolicy] = await pool.execute('SELECT policy_value FROM leave_policy_employee WHERE employee_id = ? AND leave_policy_id = ?', [employeeId, globalPolicy.leave_policy_id]);
+
+    const mergePolicies = (baseArr, overArr) => {
       const merged = {};
       // Add base values
       baseArr.forEach(item => merged[item.leaveType] = item);
@@ -158,19 +168,24 @@ class LeavePolicyModel {
       return Object.values(merged);
     };
 
-    let effectivePolicy = globalPolicy.length > 0 ? JSON.parse(globalPolicy[0].policy_value) : [];
+    let effectiveValue = JSON.parse(globalPolicy.policy_value || '[]');
     
     // Merge Role over Global
-    if (rolePolicy.length > 0) {
-      effectivePolicy = mergePolicies(JSON.stringify(effectivePolicy), rolePolicy[0].policy_value);
+    if (rolePolicy.length > 0 && rolePolicy[0].policy_value) {
+      effectiveValue = mergePolicies(effectiveValue, JSON.parse(rolePolicy[0].policy_value));
     }
 
     // Merge Employee over (Role+Global)
-    if (empPolicy.length > 0) {
-      effectivePolicy = mergePolicies(JSON.stringify(effectivePolicy), empPolicy[0].policy_value);
+    if (empPolicy.length > 0 && empPolicy[0].policy_value) {
+      effectiveValue = mergePolicies(effectiveValue, JSON.parse(empPolicy[0].policy_value));
     }
 
-    return effectivePolicy;
+    return {
+      ...globalPolicy,
+      policy_value: effectiveValue,
+      start_date: globalPolicy.start_date,
+      end_date: globalPolicy.end_date
+    };
   }
 }
 
