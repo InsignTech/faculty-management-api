@@ -18,13 +18,13 @@ WHERE total_days = 0 AND start_date != end_date;
 -- ─── STEP 2: Ensure schema is ready for half-day tracking ──────────────────
 ALTER TABLE `leave_requests` MODIFY COLUMN `total_days` DECIMAL(5,2) NOT NULL;
 
--- Add leave_half column if it doesn't exist
+-- Add leave_half_type column if it doesn't exist
 SET @dbname = DATABASE();
 SET @preparedStatement = (SELECT IF(
   (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
-   WHERE TABLE_SCHEMA = @dbname AND TABLE_NAME = 'leave_requests' AND COLUMN_NAME = 'leave_half') > 0,
+   WHERE TABLE_SCHEMA = @dbname AND TABLE_NAME = 'leave_requests' AND COLUMN_NAME = 'leave_half_type') > 0,
   'SELECT ''Column already exists''',
-  'ALTER TABLE `leave_requests` ADD COLUMN `leave_half` ENUM(''FullDay'', ''FirstHalf'', ''SecondHalf'') DEFAULT ''FullDay'' AFTER `end_date`'
+  'ALTER TABLE `leave_requests` ADD COLUMN `leave_half_type` ENUM(''FullDay'', ''FirstHalf'', ''SecondHalf'') DEFAULT ''FullDay'' AFTER `end_date`'
 ));
 PREPARE stmt FROM @preparedStatement;
 EXECUTE stmt;
@@ -94,7 +94,7 @@ BEGIN
 
     -- Insert the leave request
     INSERT INTO leave_requests (
-        employee_id, leave_type, start_date, end_date, leave_half,
+        employee_id, leave_type, start_date, end_date, leave_half_type,
         total_days, reason, attachment_path, status, applied_on
     ) VALUES (
         p_employee_id, p_leave_type, p_start_date, p_end_date, p_half_type,
@@ -110,7 +110,7 @@ SELECT 'Fix applied successfully. Verify results:' AS status;
 
 -- Verification query: check current leave_requests data
 SELECT leave_request_id, employee_id, leave_type, start_date, end_date,
-       IFNULL(leave_half, 'N/A') AS leave_half, total_days, status
+       IFNULL(leave_half_type, 'N/A') AS leave_half_type, total_days, status
 FROM leave_requests
 ORDER BY applied_on DESC
 LIMIT 10;

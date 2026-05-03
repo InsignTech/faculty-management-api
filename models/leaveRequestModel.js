@@ -58,7 +58,7 @@ class LeaveRequestModel {
 
     // 2. Overlap Validation (Smart Half-Day Aware)
     const [overlaps] = await pool.execute(
-      `SELECT start_date, end_date, leave_half, status 
+      `SELECT start_date, end_date, leave_half_type, status 
        FROM leave_requests 
        WHERE employee_id = ? 
          AND status IN ('Pending', 'Approved')
@@ -69,11 +69,11 @@ class LeaveRequestModel {
     if (overlaps.length > 0) {
       const isConflict = overlaps.some(existing => {
         // If existing is FullDay, it always conflicts
-        if (existing.leave_half === 'FullDay') return true;
+        if (existing.leave_half_type === 'FullDay') return true;
         // If new is FullDay, it conflicts with any existing on that date
         if (halfType === 'FullDay') return true;
         // If both are the same half, they conflict
-        if (existing.leave_half === halfType) return true;
+        if (existing.leave_half_type === halfType) return true;
         return false;
       });
 

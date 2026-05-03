@@ -10,7 +10,7 @@ try {
 
 const getAttendanceReport = async (req, res, next) => {
     try {
-        const { startDate, endDate, employeeId, departmentId, page = 1, limit = 50 } = req.query;
+        const { startDate, endDate, employeeId, departmentId, search, page = 1, limit = 50 } = req.query;
 
         if (!startDate || !endDate) {
             return next(new ErrorResponse('Start and End dates are required', 400));
@@ -19,7 +19,7 @@ const getAttendanceReport = async (req, res, next) => {
         const userRole = (req.user.role || '').toLowerCase();
         const isAdmin = ['admin', 'principal', 'super_admin'].includes(userRole);
         const reportData = await ReportModel.getAttendanceReport(req.user.employeeId, isAdmin, {
-            startDate, endDate, employeeId, departmentId
+            startDate, endDate, employeeId, departmentId, search
         });
 
         // Manual pagination since the report is generated as a matrix
@@ -41,7 +41,7 @@ const exportAttendanceReport = async (req, res, next) => {
             return next(new ErrorResponse('Excel export library (xlsx) is not installed on the server. Please run "npm install xlsx".', 500));
         }
 
-        const { startDate, endDate, employeeId, departmentId } = req.query;
+        const { startDate, endDate, employeeId, departmentId, search } = req.query;
 
         if (!startDate || !endDate) {
             return next(new ErrorResponse('Start and End dates are required', 400));
@@ -50,7 +50,7 @@ const exportAttendanceReport = async (req, res, next) => {
         const userRole = (req.user.role || '').toLowerCase();
         const isAdmin = ['admin', 'principal', 'super_admin'].includes(userRole);
         const reportData = await ReportModel.getAttendanceReport(req.user.employeeId, isAdmin, {
-            startDate, endDate, employeeId, departmentId
+            startDate, endDate, employeeId, departmentId, search
         });
 
         // Format data for Excel

@@ -4,14 +4,12 @@ class ReportModel {
     /**
      * Get attendance report for a given date range and filters
      */
-    static async getAttendanceReport(managerId, isAdmin, filters) {
-        const { startDate, endDate, employeeId, departmentId } = filters;
-
+    static async getAttendanceReport(managerId, isAdmin, { startDate, endDate, employeeId, departmentId, search }) {
         // 1. Get employee list based on hierarchy/role
         let employeePoolQuery = `
             SELECT 
                 e.employee_id, e.employee_code, e.employee_name, 
-                d.departmentname, r.role, 
+                d.departmentname as department, r.role, 
                 e.reporting_manager_id,
                 e.role_id, e.designation_id
             FROM employee e
@@ -48,12 +46,17 @@ class ReportModel {
             params.push(departmentId);
         }
 
+        if (search) {
+            employeePoolQuery += ` AND (e.employee_name LIKE ? OR e.employee_code LIKE ?)`;
+            params.push(`%${search}%`, `%${search}%`);
+        }
+
         const [employees] = await pool.execute(employeePoolQuery, params);
 
         // 2. Fetch all raw data for the range
         // Attendance
         const [attendance] = await pool.execute(
-            `SELECT * FROM attendance_daily WHERE date BETWEEN ? AND ?`,
+            `SELECT *, DATE_FORMAT(date, '%Y-%m-%d') as formatted_date FROM attendance_daily WHERE date BETWEEN ? AND ?`,
             [startDate, endDate]
         );
 
@@ -64,17 +67,14 @@ class ReportModel {
             [endDate, startDate]
         );
 
-        // Holidays
+        // Holidays & Weekly Offs (using holiday_master)
         const [holidays] = await pool.execute(
-            `SELECT * FROM holidays WHERE is_active = 1 AND holiday_date BETWEEN ? AND ?`,
-            [startDate, endDate]
+            `SELECT holiday_name as description, holiday_start_date, holiday_end_date, holiday_type, employee_id 
+             FROM holiday_master 
+             WHERE is_active = 1 
+             AND (holiday_start_date <= ? AND holiday_end_date >= ?)`,
+            [endDate, startDate]
         );
-
-        // Policies (for Weekly Offs)
-        const [systemPolicy] = await pool.execute(`SELECT weekly_off FROM leave_policy_system WHERE active = 1`);
-        const [rolePolicies] = await pool.execute(`SELECT role_id, weekly_off FROM leave_policy_role WHERE active = 1`);
-        const [designationPolicies] = await pool.execute(`SELECT designation_id, weekly_off FROM leave_policy_designation WHERE active = 1`);
-        const [employeePolicies] = await pool.execute(`SELECT employee_id, weekly_off FROM leave_policy_employee WHERE active = 1`);
 
         // 3. Process the matrix
         const report = [];
@@ -84,27 +84,12 @@ class ReportModel {
         let curr = new Date(start);
         while (curr <= end) {
             const dateStr = curr.toISOString().split('T')[0];
-            const dayName = curr.toLocaleDateString('en-US', { weekday: 'long' });
-            const isHoliday = holidays.find(h => h.holiday_date.toISOString().split('T')[0] === dateStr);
 
             for (const emp of employees) {
-                // Resolve Weekly Off for this employee
-                const empWO = employeePolicies.find(p => p.employee_id === emp.employee_id);
-                const desigWO = designationPolicies.find(p => p.designation_id === emp.designation_id);
-                const roleWO = rolePolicies.find(p => p.role_id === emp.role_id);
-                const sysWO = systemPolicy[0] || { weekly_off: '["Sunday"]' };
-
-                const weeklyOffs = JSON.parse(
-                    (empWO && empWO.weekly_off) ||
-                    (desigWO && desigWO.weekly_off) ||
-                    (roleWO && roleWO.weekly_off) ||
-                    sysWO.weekly_off || '["Sunday"]'
-                );
-
-                const dayAttendance = attendance.find(a =>
-                    a.employee_id === emp.employee_id &&
-                    a.date.toISOString().split('T')[0] === dateStr
-                );
+                const dayAttendance = attendance.find(a => {
+                    const aDate = new Date(a.date).toISOString().split('T')[0];
+                    return a.employee_id === emp.employee_id && aDate === dateStr;
+                });
 
                 const empLeave = leaves.find(l => {
                     const lStart = new Date(l.start_date);
@@ -112,37 +97,59 @@ class ReportModel {
                     return l.employee_id === emp.employee_id && curr >= lStart && curr <= lEnd;
                 });
                 
-                const isWeeklyOff = weeklyOffs.includes(dayName);
+                const empHoliday = holidays.find(h => {
+                    const hStart = new Date(h.holiday_start_date);
+                    const hEnd = new Date(h.holiday_end_date);
+                    // Reset times for date-only comparison
+                    const d = new Date(curr);
+                    d.setHours(0,0,0,0);
+                    hStart.setHours(0,0,0,0);
+                    hEnd.setHours(0,0,0,0);
+                    return d >= hStart && d <= hEnd && (h.employee_id === -1 || h.employee_id === emp.employee_id);
+                });
 
                 let status = 'Absent';
                 let remark = '';
 
                 if (dayAttendance) {
                     const isOnduty = dayAttendance.is_regularize_type === 'OnDuty';
-
                     const hasPunchIn = dayAttendance.first_in_time;
                     const hasPunchOut = dayAttendance.last_out_time;
 
-                    // 🔥 PRIORITY: Regularized, then Incomplete punch = Absent
-                    if (dayAttendance.is_regularized) {
+                    // If it's a processed non-working day, respect that status
+                    if (['WeekEnd', 'Public Holiday', 'Exceptional Holiday', 'Vacation', 'Leave'].includes(dayAttendance.status)) {
+                        status = dayAttendance.status === 'WeekEnd' ? 'Weekly Off' : dayAttendance.status;
+                        remark = dayAttendance.status;
+                    } 
+                    // Priority: Regularized
+                    else if (dayAttendance.is_regularized) {
                         status = 'Regularized';
-                    } else if (!hasPunchIn || !hasPunchOut) {
-                        status = 'Absent';
-                    } else if (dayAttendance.is_late === 1 || dayAttendance.is_early_leaving === 1) {
+                        remark = isOnduty ? 'On Duty' : '';
+                    } 
+                    // Irregular (Late/Early)
+                    else if (dayAttendance.is_late === 1 || dayAttendance.is_early_leaving === 1) {
                         status = 'Regularization Required';
-                    } else {
+                    } 
+                    // Incomplete punch
+                    else if (!hasPunchIn || !hasPunchOut) {
+                        status = 'Absent';
+                    } 
+                    // Normal Present
+                    else {
                         status = 'Present';
                     }
 
-                    remark = isOnduty ? 'On Duty' : '';
+                    if (isOnduty) remark = 'On Duty';
                 } else if (empLeave) {
                     status = 'Leave';
                     remark = empLeave.leave_type;
-                } else if (isHoliday) {
-                    status = 'Holiday';
-                    remark = isHoliday.description;
-                } else if (isWeeklyOff) {
-                    status = 'Weekly Off';
+                } else if (empHoliday) {
+                    if (empHoliday.holiday_type === 'WeekEnd') {
+                        status = 'Weekly Off';
+                    } else {
+                        status = 'Holiday';
+                        remark = empHoliday.description;
+                    }
                 }
 
                 report.push({

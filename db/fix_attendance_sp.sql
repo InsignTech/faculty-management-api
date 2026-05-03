@@ -14,7 +14,7 @@ BEGIN
     SELECT 
         attendance_id,
         employee_id,
-        date,
+        DATE_FORMAT(date, '%Y-%m-%d') as date,
         first_in_time,
         last_out_time,
         worked_mins,
@@ -84,7 +84,7 @@ BEGIN
     SELECT 
         attendance_id,
         employee_id,
-        date,
+        DATE_FORMAT(date, '%Y-%m-%d') as date,
         first_in_time,
         last_out_time,
         worked_mins,
