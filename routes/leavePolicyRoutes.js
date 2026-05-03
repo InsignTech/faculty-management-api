@@ -6,12 +6,11 @@ const {
   updateSystemPolicy,
   setActiveSystemPolicy,
   deleteSystemPolicy,
-  getDesignationPolicy,
-  saveDesignationPolicy,
   getRolePolicy,
   saveRolePolicy,
   getEmployeePolicy,
-  saveEmployeePolicy
+  saveEmployeePolicy,
+  getEffectivePolicy
 } = require('../controllers/leavePolicyController');
 
 // System Level
@@ -21,10 +20,6 @@ router.put('/system/:id', updateSystemPolicy);
 router.put('/system/:id/activate', setActiveSystemPolicy);
 router.delete('/system/:id', deleteSystemPolicy);
 
-// Designation Level
-router.get('/designation/:id', getDesignationPolicy);
-router.post('/designation', saveDesignationPolicy);
-
 // Role Level
 router.get('/role/:id', getRolePolicy);
 router.post('/role', saveRolePolicy);
@@ -32,5 +27,8 @@ router.post('/role', saveRolePolicy);
 // Employee Level
 router.get('/employee/:id', getEmployeePolicy);
 router.post('/employee', saveEmployeePolicy);
+
+// Effective Policy (Merged)
+router.get('/effective/:id', getEffectivePolicy);
 
 module.exports = router;

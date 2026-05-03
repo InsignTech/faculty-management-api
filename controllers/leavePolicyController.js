@@ -2,16 +2,43 @@ const LeavePolicyModel = require('../models/leavePolicyModel');
 const { sendResponse } = require('../utils/responseHelper');
 const ErrorResponse = require('../utils/errorResponse');
 
+const LEAVE_TYPES = [
+  'Sick Leave',
+  'Casual Leave',
+  'Annual Leave',
+  'Maternity Leave',
+  'Paternity Leave',
+  'Loss of Pay',
+  'Compensatory Off',
+  'Marriage Leave',
+  'Bereavement Leave',
+  'Emergency Leave',
+  'On Duty',
+  'Restricted Holiday',
+  'Half-Day Leave',
+  'Medical Leave',
+  'Study Leave',
+  'Sabbatical Leave',
+  'Adoption Leave',
+  'Child Care Leave',
+  'Business Travel Leave',
+  'Work From Home',
+  'Mental Health Leave'
+];
+
+const validatePolicyValue = (policyValue) => {
+  if (!Array.isArray(policyValue)) return false;
+  return policyValue.every(item => LEAVE_TYPES.includes(item.leaveType));
+};
+
 // --- System Level ---
 
 const getSystemPolicies = async (req, res, next) => {
   try {
     const policies = await LeavePolicyModel.getAllSystemPolicies();
-    // Parse JSON values
     const parsedPolicies = policies.map(p => ({
       ...p,
-      policy_value: p.policy_value ? JSON.parse(p.policy_value) : [],
-      weekly_off: p.weekly_off ? JSON.parse(p.weekly_off) : ["Sunday"]
+      policy_value: p.policy_value ? JSON.parse(p.policy_value) : []
     }));
     sendResponse(res, 200, 'System policies fetched successfully', parsedPolicies);
   } catch (error) {
@@ -21,16 +48,20 @@ const getSystemPolicies = async (req, res, next) => {
 
 const createSystemPolicy = async (req, res, next) => {
   try {
-    const { policy_name, policy_year, policy_value, weekly_off } = req.body;
-    if (!policy_name || !policy_year) {
-      return next(new ErrorResponse('Policy name and year are required', 400));
+    const { policy_name, start_date, end_date, policy_value } = req.body;
+    if (!policy_name || !start_date) {
+      return next(new ErrorResponse('Policy name and start date are required', 400));
     }
+    if (policy_value && !validatePolicyValue(policy_value)) {
+      return next(new ErrorResponse('Invalid leave types provided', 400));
+    }
+
     const created_by = req.user ? req.user.username : 'admin';
     const result = await LeavePolicyModel.createSystemPolicy({
       policy_name,
-      policy_year,
+      start_date,
+      end_date,
       policy_value: policy_value || [],
-      weekly_off: weekly_off || ["Sunday"],
       created_by
     });
     sendResponse(res, 201, 'System policy created successfully', result);
@@ -41,12 +72,16 @@ const createSystemPolicy = async (req, res, next) => {
 
 const updateSystemPolicy = async (req, res, next) => {
   try {
-    const { policy_name, policy_year, policy_value, weekly_off } = req.body;
+    const { policy_name, start_date, end_date, policy_value } = req.body;
+    if (policy_value && !validatePolicyValue(policy_value)) {
+      return next(new ErrorResponse('Invalid leave types provided', 400));
+    }
+
     const result = await LeavePolicyModel.updateSystemPolicy(req.params.id, {
       policy_name,
-      policy_year,
-      policy_value,
-      weekly_off
+      start_date,
+      end_date,
+      policy_value
     });
     sendResponse(res, 200, 'System policy updated successfully', result);
   } catch (error) {
@@ -72,33 +107,6 @@ const deleteSystemPolicy = async (req, res, next) => {
   }
 };
 
-// --- Designation Level ---
-
-const getDesignationPolicy = async (req, res, next) => {
-  try {
-    const policy = await LeavePolicyModel.getDesignationPolicy(req.params.id);
-    sendResponse(res, 200, 'Designation policy fetched successfully', policy || null);
-  } catch (error) {
-    next(error);
-  }
-};
-
-const saveDesignationPolicy = async (req, res, next) => {
-  try {
-    const { leave_policy_id, designation_id, policy_value } = req.body;
-    const created_by = req.user ? req.user.username : 'admin';
-    await LeavePolicyModel.saveDesignationPolicy({
-      leave_policy_id,
-      designation_id,
-      policy_value,
-      created_by
-    });
-    sendResponse(res, 201, 'Designation policy saved successfully');
-  } catch (error) {
-    next(error);
-  }
-};
-
 // --- Role Level ---
 
 const getRolePolicy = async (req, res, next) => {
@@ -112,13 +120,16 @@ const getRolePolicy = async (req, res, next) => {
 
 const saveRolePolicy = async (req, res, next) => {
   try {
-    const { leave_policy_id, role_id, policy_value, weekly_off } = req.body;
+    const { leave_policy_id, role_id, policy_value } = req.body;
+    if (policy_value && !validatePolicyValue(policy_value)) {
+      return next(new ErrorResponse('Invalid leave types provided', 400));
+    }
+
     const created_by = req.user ? req.user.username : 'admin';
     await LeavePolicyModel.saveRolePolicy({
       leave_policy_id,
       role_id,
       policy_value,
-      weekly_off,
       created_by
     });
     sendResponse(res, 201, 'Role policy saved successfully');
@@ -141,6 +152,10 @@ const getEmployeePolicy = async (req, res, next) => {
 const saveEmployeePolicy = async (req, res, next) => {
   try {
     const { leave_policy_id, employee_id, policy_value } = req.body;
+    if (policy_value && !validatePolicyValue(policy_value)) {
+      return next(new ErrorResponse('Invalid leave types provided', 400));
+    }
+
     const created_by = req.user ? req.user.username : 'admin';
     await LeavePolicyModel.saveEmployeePolicy({
       leave_policy_id,
@@ -154,16 +169,24 @@ const saveEmployeePolicy = async (req, res, next) => {
   }
 };
 
+const getEffectivePolicy = async (req, res, next) => {
+  try {
+    const policy = await LeavePolicyModel.getEffectivePolicy(req.params.id);
+    sendResponse(res, 200, 'Effective policy fetched successfully', policy);
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getSystemPolicies,
   createSystemPolicy,
   updateSystemPolicy,
   setActiveSystemPolicy,
   deleteSystemPolicy,
-  getDesignationPolicy,
-  saveDesignationPolicy,
   getRolePolicy,
   saveRolePolicy,
   getEmployeePolicy,
-  saveEmployeePolicy
+  saveEmployeePolicy,
+  getEffectivePolicy
 };
