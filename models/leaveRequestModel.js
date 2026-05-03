@@ -41,9 +41,48 @@ class LeaveRequestModel {
   static create = async (data) => {
     const { employee_id, leave_type, start_date, end_date, leave_half_type, reason, attachment_path, total_days } = data;
     
-    // Explicitly pass leave_half_type (defaults to FullDay)
     const halfType = leave_half_type || 'FullDay';
+    const requestedDays = halfType !== 'FullDay' ? 0.5 : (total_days || 0);
 
+    // 1. Balance Validation
+    const balance = await this.getLeaveBalance(employee_id, new Date(start_date));
+    const leaveBalance = balance.find(b => b.leaveType === leave_type);
+    
+    if (!leaveBalance) {
+      throw new Error(`No policy found for leave type: ${leave_type}`);
+    }
+
+    if (leaveBalance.available < requestedDays) {
+      throw new Error(`Insufficient balance for ${leave_type}. Available: ${leaveBalance.available}, Requested: ${requestedDays}`);
+    }
+
+    // 2. Overlap Validation (Smart Half-Day Aware)
+    const [overlaps] = await pool.execute(
+      `SELECT start_date, end_date, leave_half, status 
+       FROM leave_requests 
+       WHERE employee_id = ? 
+         AND status IN ('Pending', 'Approved')
+         AND (? <= end_date AND ? >= start_date)`,
+      [employee_id, start_date, end_date]
+    );
+
+    if (overlaps.length > 0) {
+      const isConflict = overlaps.some(existing => {
+        // If existing is FullDay, it always conflicts
+        if (existing.leave_half === 'FullDay') return true;
+        // If new is FullDay, it conflicts with any existing on that date
+        if (halfType === 'FullDay') return true;
+        // If both are the same half, they conflict
+        if (existing.leave_half === halfType) return true;
+        return false;
+      });
+
+      if (isConflict) {
+        throw new Error('Leave request overlaps with an existing pending or approved leave.');
+      }
+    }
+
+    // 3. Call SP to apply leave
     const [rows] = await pool.execute(
       'CALL sp_apply_leave(?, ?, ?, ?, ?, ?, ?)',
       [
@@ -59,8 +98,7 @@ class LeaveRequestModel {
     
     const result = rows[0][0];
 
-    // Double check: if the database somehow didn't update total_days (e.g. old SP version), 
-    // we force it if it's a half day and total_days is 0.
+    // Double check total_days update
     if (result && result.leave_request_id && (!result.total_days || result.total_days == 0)) {
        if (halfType !== 'FullDay') {
           await pool.execute(
@@ -68,7 +106,6 @@ class LeaveRequestModel {
             [result.leave_request_id]
           );
        } else if (total_days > 0) {
-          // If frontend sent a valid total_days for FullDay, use it
           await pool.execute(
             'UPDATE leave_requests SET total_days = ? WHERE leave_request_id = ?',
             [total_days, result.leave_request_id]
