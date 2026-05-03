@@ -81,6 +81,44 @@ class HolidayModel {
     const [result] = await pool.execute('DELETE FROM holiday_master WHERE holiday_id = ?', [id]);
     return result.affectedRows > 0;
   }
+
+  static async getUpcomingHolidays(employeeId) {
+    const query = `
+      SELECT *, 
+             DATE_FORMAT(holiday_start_date, "%Y-%m-%d") as holiday_start_date, 
+             DATE_FORMAT(holiday_end_date, "%Y-%m-%d") as holiday_end_date 
+      FROM holiday_master 
+      WHERE (employee_id = -1 OR employee_id = ?) 
+      AND holiday_type != 'WeekEnd'
+      AND holiday_start_date >= CURDATE()
+      AND is_active = 1
+      ORDER BY holiday_start_date ASC, employee_id DESC
+      LIMIT 5
+    `;
+    const [rows] = await pool.query(query, [employeeId]);
+    return rows;
+  }
+
+  static async getPersonalHolidays(employeeId, year) {
+    let query = `
+      SELECT *, 
+             DATE_FORMAT(holiday_start_date, "%Y-%m-%d") as holiday_start_date, 
+             DATE_FORMAT(holiday_end_date, "%Y-%m-%d") as holiday_end_date 
+      FROM holiday_master 
+      WHERE (employee_id = -1 OR employee_id = ?) 
+      AND is_active = 1
+    `;
+    const params = [employeeId];
+
+    if (year) {
+      query += ' AND (YEAR(holiday_start_date) = ? OR YEAR(holiday_end_date) = ?)';
+      params.push(year, year);
+    }
+
+    query += ' ORDER BY holiday_start_date ASC';
+    const [rows] = await pool.query(query, params);
+    return rows;
+  }
 }
 
 module.exports = HolidayModel;

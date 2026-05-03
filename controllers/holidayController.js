@@ -69,9 +69,38 @@ const deleteHoliday = async (req, res, next) => {
   }
 };
 
+const getUpcomingHolidays = async (req, res, next) => {
+  try {
+    const employeeId = req.query.employeeId || (req.user && req.user.employeeId);
+    if (!employeeId) {
+      return next(new ErrorResponse('Employee ID is required', 400));
+    }
+    const holidays = await HolidayModel.getUpcomingHolidays(employeeId);
+    sendResponse(res, 200, 'Upcoming holidays fetched successfully', holidays);
+  } catch (error) {
+    next(error);
+  }
+};
+
+const getPersonalHolidays = async (req, res, next) => {
+  try {
+    const employeeId = req.user && req.user.employeeId;
+    const { year } = req.query;
+    if (!employeeId) {
+      return next(new ErrorResponse('Employee ID is required', 400));
+    }
+    const holidays = await HolidayModel.getPersonalHolidays(employeeId, year);
+    sendResponse(res, 200, 'Personal holidays fetched successfully', holidays);
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getGeneralHolidays,
   getEmployeeHolidays,
   saveHoliday,
-  deleteHoliday
+  deleteHoliday,
+  getUpcomingHolidays,
+  getPersonalHolidays
 };

@@ -3,14 +3,21 @@ const {
   getGeneralHolidays, 
   getEmployeeHolidays, 
   saveHoliday, 
-  deleteHoliday 
+  deleteHoliday,
+  getUpcomingHolidays,
+  getPersonalHolidays
 } = require('../controllers/holidayController');
 const { protect, authorize } = require('../middleware/auth');
 const router = express.Router();
 
-// All routes are protected and restricted to Admin/Principal/super_admin
 router.use(protect);
-router.use(authorize('Admin', 'Principal', 'super_admin'));
+
+// Accessible by all authenticated users
+router.get('/upcoming', getUpcomingHolidays);
+router.get('/personal', getPersonalHolidays);
+
+// Management routes restricted to Admin/Principal/super_admin
+router.use(authorize('Admin', 'Principal', 'super_admin', 'admin', 'Super Admin', 'principal'));
 
 router.get('/general', getGeneralHolidays);
 router.get('/employees', getEmployeeHolidays);
