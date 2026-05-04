@@ -4,7 +4,7 @@ const SettingsModel = require('./settingsModel');
 class AttendanceModel {
     // Process raw logs for a specific date
     static async processLogs(date) {
-        const [rows] = await pool.execute('CALL sp_process_attendance_logs(?)', [date]);
+        const [rows] = await pool.execute('CALL sp_process_attendance(?)', [date]);
         return rows[0][0];
     }
 
@@ -39,7 +39,7 @@ class AttendanceModel {
             const day = String(currentDate.getDate()).padStart(2, '0');
             const localISOTime = `${year}-${month}-${day}`;
 
-            const [resultRows] = await pool.execute('CALL sp_process_attendance_logs(?)', [localISOTime]);
+            const [resultRows] = await pool.execute('CALL sp_process_attendance(?)', [localISOTime]);
             const rowsProcessed = resultRows[0][0]?.processed_rows || 0;
 
             totalProcessed += rowsProcessed;
@@ -391,7 +391,7 @@ class AttendanceModel {
         // Expecting logs to be [{ employee_id: 123, punch_time: '2024-04-04 09:00:00' }, ...]
         const values = logs.map(log => [log.employee_id, log.punch_time]);
 
-        const query = 'INSERT IGNORE INTO attendance_detail_log (employee_id, punch_time) VALUES ?';
+        const query = 'INSERT IGNORE INTO attendance_detail_log (employee_code, punch_time) VALUES ?';
         const [result] = await pool.query(query, [values]);
 
         return result.affectedRows;
