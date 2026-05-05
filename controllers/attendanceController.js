@@ -80,10 +80,17 @@ const requestAdjustment = async (req, res, next) => {
         const employeeId = req.user.employeeId;
         if (!employeeId) return next(new ErrorResponse('User is not associated with an employee record', 400, 'MISSING_EMPLOYEE_RECORD'));
         
-        const { type, date, from_date, to_date, punch_time, remarks, attachment_path } = req.body;
+        const { 
+            type, date, from_date, to_date, 
+            requested_in_time, requested_out_time, punch_time, 
+            regularization_shift_type, 
+            reason, remarks, 
+            attachment_path 
+        } = req.body;
         
-        if (!type || !punch_time) {
-            return next(new ErrorResponse('type and punch_time are required', 400));
+        // Validation: require type
+        if (!type) {
+            return next(new ErrorResponse('type is required', 400));
         }
 
         // Basic validation for dates based on type
@@ -100,8 +107,10 @@ const requestAdjustment = async (req, res, next) => {
             date, 
             from_date, 
             to_date, 
-            punch_time, 
-            remarks, 
+            requested_in_time: requested_in_time || punch_time, 
+            requested_out_time,
+            regularization_shift_type,
+            reason: reason || remarks, 
             attachment_path 
         });
         

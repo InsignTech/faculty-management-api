@@ -73,7 +73,12 @@ class AttendanceModel {
 
     // Request an adjustment (Regularization / On-Duty)
     static async requestAdjustment(data) {
-        const { employee_id, type, date, from_date, to_date, punch_time, remarks, attachment_path } = data;
+        const { 
+            employee_id, type, date, from_date, to_date, 
+            requested_in_time, requested_out_time, 
+            regularization_shift_type, 
+            reason, attachment_path 
+        } = data;
 
         // Verify employee is active
         const [empRows] = await pool.query('SELECT active FROM employee WHERE employee_id = ?', [employee_id]);
@@ -101,8 +106,8 @@ class AttendanceModel {
                 for (const d of dates) {
                     // 1. Duplicate Check
                     const [duplicates] = await conn.query(
-                        `SELECT status FROM attendance_adjustments 
-                         WHERE employee_id = ? AND date = ? AND type = ? AND status IN ('Pending', 'Approved')`,
+                        `SELECT status FROM attendance_regularization 
+                         WHERE employee_id = ? AND date = ? AND request_type = ? AND status IN ('Pending', 'Approved')`,
                         [employee_id, d, type]
                     );
 
@@ -122,10 +127,10 @@ class AttendanceModel {
 
                     // 3. Insert
                     await conn.execute(
-                        `INSERT INTO attendance_adjustments 
-                        (employee_id, type, date, punch_time, remarks, attachment_path, status, requested_on) 
-                        VALUES (?, ?, ?, ?, ?, ?, 'Pending', NOW())`,
-                        [employee_id, type, d, punch_time, remarks, attachment_path || null]
+                        `INSERT INTO attendance_regularization 
+                        (employee_id, request_type, date, requested_in_time, requested_out_time, regularization_shift_type, reason, status, created_on) 
+                        VALUES (?, ?, ?, ?, ?, ?, ?, 'Pending', NOW())`,
+                        [employee_id, type, d, requested_in_time || null, requested_out_time || null, regularization_shift_type || 'FullDay', reason]
                     );
                 }
 
@@ -144,8 +149,8 @@ class AttendanceModel {
 
         // 1. Duplicate Check
         const [duplicates] = await pool.query(
-            `SELECT status FROM attendance_adjustments 
-             WHERE employee_id = ? AND date = ? AND type = ? AND status IN ('Pending', 'Approved')`,
+            `SELECT status FROM attendance_regularization 
+             WHERE employee_id = ? AND date = ? AND request_type = ? AND status IN ('Pending', 'Approved')`,
             [employee_id, targetDate, type]
         );
 
@@ -186,10 +191,10 @@ class AttendanceModel {
         }
 
         const [result] = await pool.execute(
-            `INSERT INTO attendance_adjustments 
-            (employee_id, type, date, punch_time, remarks, attachment_path, status, requested_on) 
-            VALUES (?, ?, ?, ?, ?, ?, 'Pending', NOW())`,
-            [employee_id, type, targetDate, punch_time, remarks, attachment_path || null]
+            `INSERT INTO attendance_regularization 
+            (employee_id, request_type, date, requested_in_time, requested_out_time, regularization_shift_type, reason, status, created_on) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'Pending', NOW())`,
+            [employee_id, type, targetDate, requested_in_time || null, requested_out_time || null, regularization_shift_type || 'FullDay', reason]
         );
 
         return { adjustment_id: result.insertId };
@@ -203,7 +208,7 @@ class AttendanceModel {
 
             // 1. Get the adjustment record
             const [adjRows] = await conn.execute(
-                'SELECT * FROM attendance_adjustments WHERE adjustment_id = ?', [adjustmentId]
+                'SELECT * FROM attendance_regularization WHERE id = ?', [adjustmentId]
             );
             if (!adjRows.length) throw new Error('Adjustment not found');
 
@@ -213,22 +218,22 @@ class AttendanceModel {
 
             // 2. Update status to Approved
             await conn.execute(
-                `UPDATE attendance_adjustments 
-                 SET status = 'Approved', approved_by_id = ?, approved_on = NOW(), 
-                     remarks = CONCAT(COALESCE(remarks, ''), ' | Final Approval: ', ?)
-                 WHERE adjustment_id = ?`,
+                `UPDATE attendance_regularization 
+                 SET status = 'Approved', approved_by = ?, approved_on = NOW(), 
+                     reason = CONCAT(COALESCE(reason, ''), ' | Final Approval: ', ?)
+                 WHERE id = ?`,
                 [approverId, remarks || '', adjustmentId]
             );
 
             // 3. Apply changes to attendance table based on type
-            if (adj.type === 'Regularization') {
+            if (adj.request_type === 'Regularization') {
                 // Count previous approved regularizations this month
                 const [countRows] = await conn.execute(
                     `SELECT COUNT(*) as approved_count 
-                     FROM attendance_adjustments 
+                     FROM attendance_regularization 
                      WHERE employee_id = ? AND MONTH(date) = ? AND YEAR(date) = ? 
-                     AND status = 'Approved' AND type = 'Regularization'
-                     AND adjustment_id != ?`,
+                     AND status = 'Approved' AND request_type = 'Regularization'
+                     AND id != ?`,
                     [adj.employee_id, v_month, v_year, adjustmentId]
                 );
 
@@ -249,18 +254,20 @@ class AttendanceModel {
 
                 await conn.execute(
                     `UPDATE attendance_daily 
-                     SET is_regularized = 1, deduction_days = ?, status = 'Present', is_regularize_type = 'Regularization'
+                     SET is_regularized = 1, deduction_days = ?, status = 'Present', is_regularize_type = 'Regularization',
+                         regularization_shift_type = ?
                      WHERE employee_id = ? AND date = ?`,
-                    [deduction, adj.employee_id, adj.date]
+                    [deduction, adj.regularization_shift_type, adj.employee_id, adj.date]
                 );
-            } else if (adj.type === 'OnDuty') {
+            } else if (adj.request_type === 'OnDuty') {
                 // Update attendance_daily for On-Duty
                 await conn.execute(
                     `UPDATE attendance_daily 
                      SET status = 'Present', first_in_time = '09:00:00', last_out_time = '17:00:00', 
-                         is_regularized = 1, deduction_days = 0.00, is_regularize_type = 'OnDuty'
+                         is_regularized = 1, deduction_days = 0.00, is_regularize_type = 'OnDuty',
+                         regularization_shift_type = ?
                      WHERE employee_id = ? AND date = ?`,
-                    [adj.employee_id, adj.date]
+                    [adj.regularization_shift_type, adj.employee_id, adj.date]
                 );
             }
 
@@ -277,9 +284,9 @@ class AttendanceModel {
     // Reject an adjustment
     static async rejectAdjustment(adjustmentId, approverId, remarks) {
         const [rows] = await pool.execute(
-            `UPDATE attendance_adjustments 
-             SET status = 'Rejected', approved_by_id = ?, approved_on = NOW(), remarks = ?
-             WHERE adjustment_id = ?`,
+            `UPDATE attendance_regularization 
+             SET status = 'Rejected', approved_by = ?, approved_on = NOW(), reason = ?
+             WHERE id = ?`,
             [approverId, remarks || '', adjustmentId]
         );
         return { affected_rows: rows.affectedRows };
@@ -288,8 +295,8 @@ class AttendanceModel {
     // Delete a pending adjustment
     static async deleteAdjustment(adjustmentId, employeeId) {
         const [rows] = await pool.execute(
-            `DELETE FROM attendance_adjustments 
-             WHERE adjustment_id = ? AND employee_id = ? AND status = 'Pending'`,
+            `DELETE FROM attendance_regularization 
+             WHERE id = ? AND employee_id = ? AND status = 'Pending'`,
             [adjustmentId, employeeId]
         );
         return { affected_rows: rows.affectedRows };
@@ -299,8 +306,8 @@ class AttendanceModel {
     static async getEmployeeAdjustments(employeeId, month = null, year = null) {
         let query = `
             SELECT aj.*, e.employee_name as approver_name 
-            FROM attendance_adjustments aj 
-            LEFT JOIN employee e ON aj.approved_by_id = e.employee_id 
+            FROM attendance_regularization aj 
+            LEFT JOIN employee e ON aj.approved_by = e.employee_id 
             WHERE aj.employee_id = ?
         `;
         const params = [employeeId];
@@ -314,7 +321,7 @@ class AttendanceModel {
             params.push(year);
         }
 
-        query += " ORDER BY aj.requested_on DESC";
+        query += " ORDER BY aj.created_on DESC";
 
         const [rows] = await pool.execute(query, params);
         return rows;
@@ -323,7 +330,7 @@ class AttendanceModel {
     // Get a specific adjustment by ID
     static async getEmployeeAdjustmentsById(id) {
         const [rows] = await pool.execute(
-            `SELECT * FROM attendance_adjustments WHERE adjustment_id = ?`,
+            `SELECT * FROM attendance_regularization WHERE id = ?`,
             [id]
         );
         return rows;
@@ -333,10 +340,10 @@ class AttendanceModel {
     static async getPendingAdjustments() {
         const [rows] = await pool.query(`
             SELECT aj.*, e.employee_name, e.employee_code 
-            FROM attendance_adjustments aj 
+            FROM attendance_regularization aj 
             JOIN employee e ON aj.employee_id = e.employee_id 
             WHERE aj.status = 'Pending' 
-            ORDER BY aj.requested_on ASC
+            ORDER BY aj.created_on ASC
         `);
         return rows;
     }
@@ -354,11 +361,11 @@ class AttendanceModel {
                 INNER JOIN subordinates s ON e.reporting_manager_id = s.employee_id
             )
             SELECT aj.*, e.employee_name, e.employee_code 
-            FROM attendance_adjustments aj 
+            FROM attendance_regularization aj 
             JOIN employee e ON aj.employee_id = e.employee_id 
             WHERE aj.employee_id IN (SELECT employee_id FROM subordinates)
               AND aj.status = 'Pending'
-            ORDER BY aj.requested_on ASC
+            ORDER BY aj.created_on ASC
         `;
         const [rows] = await pool.execute(query, [managerId]);
         return rows;
