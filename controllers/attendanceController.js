@@ -1,5 +1,7 @@
 const AttendanceModel = require('../models/attendanceModel');
 const EmployeeModel = require('../models/employeeModel');
+const LeaveRequestModel = require('../models/leaveRequestModel');
+const pool = require('../config/db');
 const { sendResponse } = require('../utils/responseHelper');
 const ErrorResponse = require('../utils/errorResponse');
 
@@ -58,6 +60,31 @@ const getMyAttendanceSummary = async (req, res, next) => {
         const month = req.query.month || new Date().getMonth() + 1;
         const year = req.query.year || new Date().getFullYear();
         const summary = await AttendanceModel.getAttendanceSummary(targetEmpId, month, year);
+
+        // Fetch Leave Balance
+        try {
+            const balances = await LeaveRequestModel.getLeaveBalance(targetEmpId);
+            summary.leave_balance = balances.reduce((sum, b) => sum + b.available, 0);
+        } catch (err) {
+            console.error('Failed to fetch leave balance for summary:', err);
+            summary.leave_balance = 0;
+        }
+
+        // Fetch Month Leaves Taken (Approved only)
+        try {
+            const [takenRows] = await pool.execute(
+                `SELECT COALESCE(SUM(total_days), 0) as taken 
+                 FROM leave_requests 
+                 WHERE employee_id = ? AND status = 'Approved' 
+                 AND MONTH(start_date) = ? AND YEAR(start_date) = ?`,
+                [targetEmpId, month, year]
+            );
+            summary.month_leaves_taken = takenRows[0].taken;
+        } catch (err) {
+            console.error('Failed to fetch month leaves taken for summary:', err);
+            summary.month_leaves_taken = 0;
+        }
+
         sendResponse(res, 200, 'Attendance summary fetched', summary);
     } catch (error) { next(error); }
 };
