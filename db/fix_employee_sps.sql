@@ -148,9 +148,11 @@ BEGIN
         e.employee_id,
         e.employee_name AS name,
         d.departmentname AS dept,
-        e.department_id
+        e.department_id,
+        r.role AS role_name
     FROM employee e
     LEFT JOIN department d ON e.department_id = d.department_id
+    LEFT JOIN app_role r ON e.role_id = r.role_id
     WHERE 
         e.employee_id != p_exclude_employee_id
         AND e.active = 1
