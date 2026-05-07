@@ -49,14 +49,23 @@ const getEmployees = async (req, res, next) => {
     const { search, role, page = 1, limit = 10 } = req.query;
     const offset = (page - 1) * limit;
 
-    // Hierarchy filter: Non-admins only see people reporting to them
     const userRole = req.user.role?.toLowerCase();
     const isAdmin = ['admin', 'super_admin', 'principal'].includes(userRole);
-    const managerId = isAdmin ? 0 : (req.user.employeeId || 0);
+    
+    let managerId = 0;
+    let myManagerId = 0;
+
+    if (!isAdmin) {
+      const myId = req.user.employeeId || 0;
+      managerId = myId;
+      
+      const currentUserEmp = await EmployeeModel.getById(myId);
+      myManagerId = currentUserEmp?.reporting_manager_id || 0;
+    }
 
     const [employees, total] = await Promise.all([
-      EmployeeModel.getFiltered(search, role, parseInt(limit), parseInt(offset), managerId),
-      EmployeeModel.getTotalCount(search, role, managerId)
+      EmployeeModel.getFiltered(search, role, parseInt(limit), parseInt(offset), managerId, myManagerId),
+      EmployeeModel.getTotalCount(search, role, managerId, myManagerId)
     ]);
 
     sendResponse(res, 200, 'Employees fetched successfully', {

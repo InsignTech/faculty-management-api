@@ -91,7 +91,7 @@ class EmployeeModel {
     return rows;
   }
 
-  static async getFiltered(searchTerm = '', roleId = 0, limit = 10, offset = 0, managerId = 0, activeOnly = true) {
+  static async getFiltered(searchTerm = '', roleId = 0, limit = 10, offset = 0, managerId = 0, myManagerId = 0, activeOnly = true) {
     const query = `
     SELECT 
         e.*,
@@ -99,7 +99,8 @@ class EmployeeModel {
         r.role AS role_name,
         des.designation AS designation_name,
         m.employee_name AS manager_name,
-        mr.role AS manager_role
+        mr.role AS manager_role,
+        CASE WHEN e.employee_id = ? THEN 1 ELSE 0 END as is_my_manager
     FROM employee e
     LEFT JOIN department d ON e.department_id = d.department_id
     LEFT JOIN app_role r ON e.role_id = r.role_id
@@ -109,7 +110,11 @@ class EmployeeModel {
     WHERE 
         (? = '' OR e.employee_name LIKE ? OR e.employee_code LIKE ?)
         AND (? = 0 OR e.role_id = ?)
-        AND (? = 0 OR e.reporting_manager_id = ?)
+        AND (
+          (? = 0 AND ? = 0) -- Admin view
+          OR (e.reporting_manager_id = ?) -- Reports
+          OR (e.employee_id = ? AND ? != 0) -- My Manager
+        )
         AND (? = 0 OR e.active = 1)
     ORDER BY e.employee_id DESC
     LIMIT ? OFFSET ?
@@ -119,14 +124,18 @@ class EmployeeModel {
     const likeTerm = `%${term}%`;
     const rId = parseInt(roleId) || 0;
     const mId = parseInt(managerId) || 0;
+    const reportToId = parseInt(myManagerId) || 0;
     const aOnly = activeOnly ? 1 : 0;
     const v_limit = parseInt(limit) || 10;
     const v_offset = parseInt(offset) || 0;
 
     const [rows] = await pool.query(query, [
+      reportToId,
       term, likeTerm, likeTerm,
       rId, rId,
-      mId, mId,
+      mId, reportToId,
+      mId,
+      reportToId, reportToId,
       aOnly,
       v_limit,
       v_offset
@@ -135,14 +144,18 @@ class EmployeeModel {
     return rows;
   }
 
-  static async getTotalCount(searchTerm = '', roleId = 0, managerId = 0, activeOnly = true) {
+  static async getTotalCount(searchTerm = '', roleId = 0, managerId = 0, myManagerId = 0, activeOnly = true) {
     const query = `
     SELECT COUNT(*) as total
     FROM employee e
     WHERE 
         (? = '' OR e.employee_name LIKE ? OR e.employee_code LIKE ?)
         AND (? = 0 OR e.role_id = ?)
-        AND (? = 0 OR e.reporting_manager_id = ?)
+        AND (
+          (? = 0 AND ? = 0) -- Admin view
+          OR (e.reporting_manager_id = ?) -- Reports
+          OR (e.employee_id = ? AND ? != 0) -- My Manager
+        )
         AND (? = 0 OR e.active = 1)
   `;
 
@@ -150,12 +163,15 @@ class EmployeeModel {
     const likeTerm = `%${term}%`;
     const rId = parseInt(roleId) || 0;
     const mId = parseInt(managerId) || 0;
+    const reportToId = parseInt(myManagerId) || 0;
     const aOnly = activeOnly ? 1 : 0;
 
     const [rows] = await pool.query(query, [
       term, likeTerm, likeTerm,
       rId, rId,
-      mId, mId,
+      mId, reportToId,
+      mId,
+      reportToId, reportToId,
       aOnly
     ]);
 

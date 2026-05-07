@@ -15,7 +15,7 @@ const router = express.Router();
 
 router.use(protect);
 
-router.get('/', authorize('Admin', 'admin', 'principal', 'super_admin', 'HOD', 'hod'), getEmployees);
+router.get('/', getEmployees);
 router.post('/', authorize('Admin', 'admin', 'principal', 'super_admin'), createEmployee);
 
 router.get('/potential-managers', authorize('Admin', 'admin', 'principal', 'super_admin', 'HOD', 'hod'), getPotentialManagers);
