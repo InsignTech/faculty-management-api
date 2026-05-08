@@ -39,7 +39,7 @@ const router = express.Router();
  *       403:
  *         description: Forbidden
  */
-router.post('/', protect, authorize('Admin', 'principal'), createDesignation);
+router.post('/', protect, authorize('Admin', 'principal', 'super_admin'), createDesignation);
 
 /**
  * @swagger
@@ -103,7 +103,7 @@ router.get('/:id', protect, getDesignationById);
  *       200:
  *         description: Designation updated successfully
  */
-router.put('/:id', protect, authorize('Admin', 'principal'), updateDesignation);
+router.put('/:id', protect, authorize('Admin', 'principal', 'super_admin'), updateDesignation);
 
 /**
  * @swagger
@@ -123,6 +123,6 @@ router.put('/:id', protect, authorize('Admin', 'principal'), updateDesignation);
  *       200:
  *         description: Designation deleted successfully
  */
-router.delete('/:id', protect, authorize('Admin', 'principal'), deleteDesignation);
+router.delete('/:id', protect, authorize('Admin', 'principal', 'super_admin'), deleteDesignation);
 
 module.exports = router;
