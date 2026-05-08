@@ -146,6 +146,7 @@ CREATE PROCEDURE `sp_get_potential_managers`(
 BEGIN
     SELECT 
         e.employee_id,
+        e.employee_code AS code,
         e.employee_name AS name,
         d.departmentname AS dept,
         e.department_id,
@@ -156,7 +157,9 @@ BEGIN
     WHERE 
         e.employee_id != p_exclude_employee_id
         AND e.active = 1
-        AND (p_search_term IS NULL OR p_search_term = '' OR e.employee_name LIKE CONCAT('%', p_search_term, '%'))
+        AND (p_search_term IS NULL OR p_search_term = '' 
+             OR e.employee_name LIKE CONCAT('%', p_search_term, '%') 
+             OR e.employee_code LIKE CONCAT('%', p_search_term, '%'))
         AND (p_department_id IS NULL OR p_department_id = 0 OR e.department_id = p_department_id)
     ORDER BY e.employee_name ASC;
 END //
