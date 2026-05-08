@@ -1,14 +1,12 @@
 const pool = require('./config/db');
-
-async function checkSP() {
-    try {
-        const [rows] = await pool.query("SHOW CREATE PROCEDURE sp_apply_leave");
-        console.log(rows[0]['Create Procedure']);
-    } catch (err) {
-        console.error(err);
-    } finally {
-        process.exit(0);
-    }
+async function check() {
+  try {
+    const [rows] = await pool.query("SHOW PROCEDURE STATUS WHERE Name IN ('sp_process_attendance', 'sp_process_attendance_logs')");
+    console.log(rows);
+  } catch (e) {
+    console.error(e);
+  } finally {
+    process.exit(0);
+  }
 }
-
-checkSP();
+check();

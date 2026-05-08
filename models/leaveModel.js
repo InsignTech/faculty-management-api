@@ -143,14 +143,62 @@ class LeaveModel {
     }
 
     /**
-     * Delete a pending leave request (only the owner can delete, only if Pending).
+     * Cancel a leave request (Update status to Cancelled).
+     * Owners can cancel Pending.
+     * Admins/Managers can cancel Pending or Approved.
      */
-    static async delete(requestId, employeeId) {
-        const [result] = await pool.execute(
-            'DELETE FROM leave_requests WHERE leave_request_id = ? AND employee_id = ? AND status = "Pending"',
-            [requestId, employeeId]
+    static async cancel(requestId, cancellerId, cancellerRole) {
+        // Fetch request details
+        const [rows] = await pool.execute(
+            'SELECT status, employee_id FROM leave_requests WHERE leave_request_id = ?',
+            [requestId]
         );
-        return result;
+
+        if (rows.length === 0) return { affected_rows: 0, message: 'Request not found' };
+        const request = rows[0];
+
+        const isAdmin = cancellerRole && ['super_admin', 'admin', 'Admin', 'Principal', 'principal', 'HOD', 'Manager'].includes(cancellerRole);
+        
+        // Manager check
+        const [managerCheck] = await pool.execute(
+            'SELECT 1 FROM employee WHERE employee_id = ? AND reporting_manager_id = ?',
+            [request.employee_id, cancellerId]
+        );
+        const isManager = managerCheck.length > 0;
+        const isOwner = request.employee_id === cancellerId;
+
+        if (!isOwner && !isAdmin && !isManager) {
+            throw new Error('Not authorized to cancel this request');
+        }
+
+        // Owners only Pending, Admins/Managers Pending or Approved
+        if (isOwner && !isAdmin && !isManager && request.status !== 'Pending') {
+            throw new Error('You can only cancel your own pending requests');
+        }
+
+        if (request.status === 'Rejected' || request.status === 'Cancelled') {
+            throw new Error(`Cannot cancel a request that is already ${request.status}`);
+        }
+
+        // If the leave was already approved, we need to reverse the attendance status
+        if (request.status === 'Approved') {
+            const AttendanceModel = require('./attendanceModel');
+            // Fetch the dates again or use the request object if it has them
+            const [leaveInfo] = await pool.execute(
+                'SELECT start_date, end_date FROM leave_requests WHERE leave_request_id = ?',
+                [requestId]
+            );
+            if (leaveInfo.length > 0) {
+                await AttendanceModel.revertLeave(request.employee_id, leaveInfo[0].start_date, leaveInfo[0].end_date);
+            }
+        }
+
+        const [result] = await pool.execute(
+            'UPDATE leave_requests SET status = "Cancelled", approved_by_id = ? WHERE leave_request_id = ?',
+            [cancellerId, requestId]
+        );
+
+        return { affected_rows: result.affectedRows };
     }
 }
 

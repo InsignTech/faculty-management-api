@@ -403,6 +403,62 @@ class AttendanceModel {
 
         return result.affectedRows;
     }
+
+    /**
+     * Revert attendance records from 'Leave' status back to 'Absent' 
+     * and re-evaluate them if a leave is cancelled.
+     */
+    static async revertLeave(employeeId, startDate, endDate) {
+        const start = new Date(startDate);
+        const end = new Date(endDate);
+        const dates = [];
+        
+        let current = new Date(start);
+        // Reset to midnight to avoid hour-based comparison issues
+        current.setHours(0, 0, 0, 0);
+        const finalEnd = new Date(end);
+        finalEnd.setHours(0, 0, 0, 0);
+
+        while (current <= finalEnd) {
+            const year = current.getFullYear();
+            const month = String(current.getMonth() + 1).padStart(2, '0');
+            const day = String(current.getDate()).padStart(2, '0');
+            dates.push(`${year}-${month}-${day}`);
+            
+            current.setDate(current.getDate() + 1);
+        }
+
+        const conn = await pool.getConnection();
+        try {
+            await conn.beginTransaction();
+            for (const d of dates) {
+                // 1. Delete the 'Leave' record
+                // We delete it so that the processing engine can decide whether 
+                // it should be 'Present' (if logs exist) or stay empty/Absent.
+                const [result] = await conn.execute(
+                    `DELETE FROM attendance_daily 
+                     WHERE employee_id = ? AND date = ? AND status = 'Leave'`,
+                    [employeeId, d]
+                );
+
+                if (result.affectedRows > 0) {
+                    // 2. Try to re-process logs for this date.
+                    // If logs exist, it will recreate a 'Present' record.
+                    try {
+                        await conn.execute('CALL sp_process_attendance(?)', [d]);
+                    } catch (e) {
+                        console.error(`Failed to re-process attendance for ${d} during leave reversal:`, e);
+                    }
+                }
+            }
+            await conn.commit();
+        } catch (err) {
+            await conn.rollback();
+            throw err;
+        } finally {
+            conn.release();
+        }
+    }
 }
 
 module.exports = AttendanceModel;

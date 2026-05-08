@@ -92,10 +92,11 @@ const cancelLeaveRequest = async (req, res, next) => {
   try {
     const { id } = req.params;
     const employeeId = req.user?.employeeId;
+    const userRole = req.user?.role;
 
-    // Only allow cancellation of own pending requests
+    // Fetch the request and the requester's manager info
     const [rows] = await pool.execute(
-      'SELECT status, employee_id FROM leave_requests WHERE leave_request_id = ?',
+      'SELECT status, employee_id, start_date, end_date FROM leave_requests WHERE leave_request_id = ?',
       [id]
     );
 
@@ -105,15 +106,46 @@ const cancelLeaveRequest = async (req, res, next) => {
 
     const request = rows[0];
 
-    if (request.employee_id !== employeeId) {
-      return res.status(403).json({ success: false, message: 'You can only cancel your own requests' });
+    // Authorization logic
+    const isAdmin = ['super_admin', 'admin', 'Admin', 'Principal', 'principal', 'HOD', 'Manager'].includes(userRole);
+    
+    // Check if the current user is the reporting manager of the person who requested the leave
+    const [managerCheck] = await pool.execute(
+      'SELECT 1 FROM employee WHERE employee_id = ? AND reporting_manager_id = ?',
+      [request.employee_id, employeeId]
+    );
+    const isManager = managerCheck.length > 0;
+
+    // Check if it's their own request
+    const isOwner = request.employee_id === employeeId;
+
+    if (!isOwner && !isAdmin && !isManager) {
+      return res.status(403).json({ success: false, message: 'You are not authorized to cancel this request' });
     }
 
-    if (request.status !== 'Pending') {
+    // Status logic:
+    // Owners can only cancel PENDING requests.
+    // Managers/Admins can cancel PENDING or APPROVED requests.
+    if (isOwner && !isAdmin && !isManager && request.status !== 'Pending') {
+      return res.status(400).json({ success: false, message: 'You can only cancel your own pending requests. For approved leaves, please contact your manager.' });
+    }
+
+    if (request.status === 'Rejected' || request.status === 'Cancelled') {
       return res.status(400).json({ success: false, message: `Cannot cancel a request that is already ${request.status}` });
     }
 
-    await pool.execute('DELETE FROM leave_requests WHERE leave_request_id = ?', [id]);
+    // If the leave was already approved, we need to reverse the attendance status
+    if (request.status === 'Approved') {
+      const AttendanceModel = require('../models/attendanceModel');
+      await AttendanceModel.revertLeave(request.employee_id, request.start_date, request.end_date);
+    }
+
+    // Perform the cancellation (update status instead of deleting for audit trail)
+    await pool.execute(
+      'UPDATE leave_requests SET status = "Cancelled", approved_by_id = ? WHERE leave_request_id = ?', 
+      [employeeId, id]
+    );
+
     sendResponse(res, 200, 'Leave request cancelled successfully');
   } catch (error) {
     next(error);
