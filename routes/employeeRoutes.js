@@ -4,6 +4,7 @@ const {
   getEmployees,
   getPotentialManagers,
   getEmployeeById,
+  getMe,
   updateEmployee,
   deleteEmployee,
   updateReportingManager,
@@ -20,6 +21,8 @@ router.post('/', authorize('Admin', 'admin', 'principal', 'super_admin'), create
 
 router.get('/potential-managers', authorize('Admin', 'admin', 'principal', 'super_admin', 'HOD', 'hod'), getPotentialManagers);
 router.get('/subordinates', authorize('Admin', 'admin', 'principal', 'super_admin', 'HOD', 'hod'), getSubordinates);
+
+router.get('/me', getMe);
 
 router.get('/:id', authorize('Admin', 'admin', 'principal', 'super_admin', 'HOD', 'hod'), getEmployeeById);
 router.put('/:id', authorize('Admin', 'admin', 'principal', 'super_admin'), updateEmployee);

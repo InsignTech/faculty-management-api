@@ -108,6 +108,22 @@ const getEmployeeById = async (req, res, next) => {
   }
 };
 
+const getMe = async (req, res, next) => {
+  try {
+    const myId = req.user.employeeId;
+    if (!myId) {
+      return next(new ErrorResponse('Employee ID not found in token', 400, 'BAD_REQUEST'));
+    }
+    const employee = await EmployeeModel.getById(myId);
+    if (!employee) {
+      return next(new ErrorResponse('Employee not found', 404, 'NOT_FOUND'));
+    }
+    sendResponse(res, 200, 'Profile fetched successfully', employee);
+  } catch (error) {
+    next(error);
+  }
+};
+
 const updateEmployee = async (req, res, next) => {
   try {
     const { email } = req.body;
@@ -168,6 +184,7 @@ module.exports = {
   getEmployees,
   getPotentialManagers,
   getEmployeeById,
+  getMe,
   updateEmployee,
   deleteEmployee,
   updateReportingManager,
