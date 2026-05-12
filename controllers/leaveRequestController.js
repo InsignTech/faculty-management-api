@@ -134,19 +134,10 @@ const cancelLeaveRequest = async (req, res, next) => {
       return res.status(400).json({ success: false, message: `Cannot cancel a request that is already ${request.status}` });
     }
 
-    // If the leave was already approved, we need to reverse the attendance status
-    if (request.status === 'Approved') {
-      const AttendanceModel = require('../models/attendanceModel');
-      await AttendanceModel.revertLeave(request.employee_id, request.start_date, request.end_date);
-    }
-
-    // Perform the cancellation (update status instead of deleting for audit trail)
-    await pool.execute(
-      'UPDATE leave_requests SET status = "Cancelled", approved_by_id = ? WHERE leave_request_id = ?', 
-      [employeeId, id]
-    );
-
-    sendResponse(res, 200, 'Leave request cancelled successfully');
+    const LeaveModel = require('../models/leaveModel');
+    const result = await LeaveModel.cancel(id, employeeId);
+    
+    sendResponse(res, 200, 'Leave request cancelled successfully', result);
   } catch (error) {
     next(error);
   }

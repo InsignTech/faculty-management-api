@@ -9,8 +9,11 @@ const {
   deleteEmployee,
   updateReportingManager,
   getSubordinates,
+  updateProfilePicture,
 } = require('../controllers/employeeController');
 const { protect, authorize } = require('../middleware/auth');
+const multer = require('multer');
+const upload = multer({ storage: multer.memoryStorage() });
 
 const router = express.Router();
 
@@ -23,6 +26,7 @@ router.get('/potential-managers', authorize('Admin', 'admin', 'principal', 'supe
 router.get('/subordinates', authorize('Admin', 'admin', 'principal', 'super_admin', 'HOD', 'hod'), getSubordinates);
 
 router.get('/me', getMe);
+router.post('/profile-picture', upload.single('profile_picture'), updateProfilePicture);
 
 router.get('/:id', authorize('Admin', 'admin', 'principal', 'super_admin', 'HOD', 'hod'), getEmployeeById);
 router.put('/:id', authorize('Admin', 'admin', 'principal', 'super_admin'), updateEmployee);

@@ -1,3 +1,4 @@
+require('dotenv').config();
 const debugLog = require('./utils/debugLogger');
 
 debugLog("🚀 Starting app...");
@@ -18,7 +19,6 @@ process.on("unhandledRejection", (err) => {
 debugLog("Step 1: Loading dependencies...");
 const app = require('./app');
 const pool = require('./config/db');
-require('dotenv').config();
 
 // Initialize Cron Jobs
 require('./cron/attendanceCron');

@@ -179,6 +179,43 @@ const getSubordinates = async (req, res, next) => {
   }
 };
 
+const updateProfilePicture = async (req, res, next) => {
+  try {
+    const employeeId = req.user.employeeId;
+    if (!employeeId) {
+      return next(new ErrorResponse('Employee ID not found in token', 400, 'BAD_REQUEST'));
+    }
+
+    if (!req.file) {
+      return next(new ErrorResponse('Please upload a file', 400, 'BAD_REQUEST'));
+    }
+
+    // 1. Get current employee to check for old profile picture
+    const employee = await EmployeeModel.getById(employeeId);
+    if (!employee) {
+      return next(new ErrorResponse('Employee not found', 404, 'NOT_FOUND'));
+    }
+
+    // 2. Upload new file to R2
+    const { uploadToR2, deleteFromR2 } = require('../utils/s3Service');
+    const fileName = await uploadToR2(req.file.buffer, req.file.originalname, 'profiles');
+
+    // 3. Update database
+    await EmployeeModel.updateProfilePicture(employeeId, fileName);
+
+    // 4. Delete old file from R2 if it exists
+    if (employee.profile_picture) {
+      await deleteFromR2(employee.profile_picture);
+    }
+
+    sendResponse(res, 200, 'Profile picture updated successfully', {
+      profile_picture: fileName
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   createEmployee,
   getEmployees,
@@ -189,4 +226,5 @@ module.exports = {
   deleteEmployee,
   updateReportingManager,
   getSubordinates,
+  updateProfilePicture,
 };

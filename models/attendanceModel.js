@@ -147,18 +147,33 @@ class AttendanceModel {
         // Single Date Logic (Regularization or single-day On-Duty)
         const targetDate = date || from_date;
 
-        // 1. Duplicate Check
-        const [duplicates] = await pool.query(
+        // 1. Duplicate Regularization Check
+        const [regDuplicates] = await pool.query(
             `SELECT status FROM attendance_regularization 
              WHERE employee_id = ? AND date = ? AND request_type = ? AND status IN ('Pending', 'Approved')`,
             [employee_id, targetDate, type]
         );
 
-        if (duplicates.length > 0) {
-            throw new Error(`A ${duplicates[0].status.toLowerCase()} ${type} request already exists for this date.`);
+        if (regDuplicates.length > 0) {
+            throw new Error(`A ${regDuplicates[0].status.toLowerCase()} ${type} request already exists for this date.`);
         }
 
-        // 2. Validation for Regularization
+        // 2. Overlapping Leave Check
+        const shiftType = regularization_shift_type || 'FullDay';
+        const [leaveOverlap] = await pool.query(
+            `SELECT leave_half_type, status FROM leave_requests 
+             WHERE employee_id = ? AND ? BETWEEN start_date AND end_date AND status IN ('Pending', 'Approved')`,
+            [employee_id, targetDate]
+        );
+
+        if (leaveOverlap.length > 0) {
+            const leave = leaveOverlap[0];
+            if (leave.leave_half_type === 'FullDay' || shiftType === 'FullDay' || leave.leave_half_type === shiftType) {
+                throw new Error(`Overlap Error: A ${leave.status.toLowerCase()} leave request exists for this period (${leave.leave_half_type}).`);
+            }
+        }
+
+        // 3. Validation for Regularization
         if (type === 'Regularization') {
             if (new Date(targetDate) > new Date()) {
                 throw new Error('Regularization cannot be requested for future dates.');
@@ -216,7 +231,21 @@ class AttendanceModel {
             const v_month = new Date(adj.date).getMonth() + 1;
             const v_year = new Date(adj.date).getFullYear();
 
-            // 2. Update status to Approved
+            // 2. Check for overlapping approved leaves
+            const [leaveCheck] = await conn.execute(
+                `SELECT is_leave, leave_shift_type FROM attendance_daily 
+                 WHERE employee_id = ? AND date = ? AND is_leave = 1`,
+                [adj.employee_id, adj.date]
+            );
+
+            if (leaveCheck.length > 0) {
+                const leave = leaveCheck[0];
+                if (leave.leave_shift_type === 'FullDay' || adj.regularization_shift_type === 'FullDay' || leave.leave_shift_type === adj.regularization_shift_type) {
+                    throw new Error(`Approval Error: This day/half is already marked as Leave (${leave.leave_shift_type}).`);
+                }
+            }
+
+            // 3. Update status to Approved
             await conn.execute(
                 `UPDATE attendance_regularization 
                  SET status = 'Approved', approved_by = ?, approved_on = NOW(), 

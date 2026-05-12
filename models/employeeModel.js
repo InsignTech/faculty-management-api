@@ -238,6 +238,14 @@ class EmployeeModel {
     return result;
   }
 
+  static async updateProfilePicture(id, fileName) {
+    const [result] = await pool.execute(
+      'UPDATE employee SET profile_picture = ? WHERE employee_id = ?',
+      [fileName || null, id]
+    );
+    return result;
+  }
+
   static async getSubordinates(managerId) {
     const query = `
       WITH RECURSIVE subordinates AS (
