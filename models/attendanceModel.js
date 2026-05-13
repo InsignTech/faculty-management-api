@@ -149,13 +149,19 @@ class AttendanceModel {
 
         // 1. Duplicate Regularization Check
         const [regDuplicates] = await pool.query(
-            `SELECT status FROM attendance_regularization 
+            `SELECT status, regularization_shift_type FROM attendance_regularization 
              WHERE employee_id = ? AND date = ? AND request_type = ? AND status IN ('Pending', 'Approved')`,
             [employee_id, targetDate, type]
         );
 
         if (regDuplicates.length > 0) {
-            throw new Error(`A ${regDuplicates[0].status.toLowerCase()} ${type} request already exists for this date.`);
+            const requestedShift = regularization_shift_type || 'FullDay';
+            for (const dup of regDuplicates) {
+                // Block if already a FullDay exists, OR if requesting FullDay, OR if specific half matches
+                if (dup.regularization_shift_type === 'FullDay' || requestedShift === 'FullDay' || dup.regularization_shift_type === requestedShift) {
+                    throw new Error(`A ${dup.status.toLowerCase()} ${type} request already exists for this date (${dup.regularization_shift_type}).`);
+                }
+            }
         }
 
         // 2. Overlapping Leave Check
@@ -178,6 +184,40 @@ class AttendanceModel {
             if (new Date(targetDate) > new Date()) {
                 throw new Error('Regularization cannot be requested for future dates.');
             }
+
+            // --- Limit Check ---
+            const targetMonth = new Date(targetDate).getMonth() + 1;
+            const targetYear = new Date(targetDate).getFullYear();
+
+            // Count existing Approved and Pending regularizations this month
+            const [countRows] = await pool.query(
+                `SELECT COUNT(*) as current_count 
+                 FROM attendance_regularization 
+                 WHERE employee_id = ? 
+                 AND MONTH(date) = ? 
+                 AND YEAR(date) = ? 
+                 AND request_type = 'Regularization'
+                 AND status IN ('Approved', 'Pending')`,
+                [employee_id, targetMonth, targetYear]
+            );
+
+            const currentCount = countRows[0].current_count;
+
+            // Fetch limit from settings
+            let limit = 3;
+            try {
+                const limitSetting = await SettingsModel.getSettingByKey('regularization_limit');
+                if (limitSetting && limitSetting.settings_value) {
+                    limit = parseInt(limitSetting.settings_value);
+                }
+            } catch (err) {
+                console.error('Error fetching regularization limit setting:', err);
+            }
+
+            if (currentCount >= limit) {
+                throw new Error(`Limit Exceeded: You have already reached your monthly limit of ${limit} regularization requests (including pending ones).`);
+            }
+            // --------------------
 
             const [attendanceRows] = await pool.query(
                 `SELECT is_late, is_early_leaving, status, first_in_time, last_out_time 
@@ -279,9 +319,9 @@ class AttendanceModel {
                     console.error('Error fetching regularization limit setting:', err);
                 }
 
-                // Fetch existing status (Leaves AND Physical Punches)
+                // Fetch existing status (Leaves AND Physical Punches AND Previous Regularizations)
                 const [existingStatus] = await conn.execute(
-                    `SELECT is_leave, leave_shift_type, shift_type FROM attendance_daily 
+                    `SELECT is_leave, leave_shift_type, shift_type, is_regularized, regularization_shift_type FROM attendance_daily 
                      WHERE employee_id = ? AND date = ?`,
                     [adj.employee_id, adj.date]
                 );
@@ -290,16 +330,36 @@ class AttendanceModel {
                 // Start by assuming the other half is absent (0.50 deduction)
                 let deduction = (adj.regularization_shift_type === 'FullDay') ? 0.00 : 0.50;
                 
+                let finalRegShift = adj.regularization_shift_type;
                 if (existingStatus.length > 0) {
                     const row = existingStatus[0];
                     const regHalf = adj.regularization_shift_type;
                     
-                    // Check if other half is covered by physical work (shift_type) or leave
-                    const isFirstHalfCovered = (row.shift_type === 'FirstHalf' || row.shift_type === 'FullDay' || (row.is_leave === 1 && row.leave_shift_type === 'FirstHalf'));
-                    const isSecondHalfCovered = (row.shift_type === 'SecondHalf' || row.shift_type === 'FullDay' || (row.is_leave === 1 && row.leave_shift_type === 'SecondHalf'));
+                    // Merge logic: If already partially regularized and this covers the other half -> FullDay
+                    if (row.is_regularized === 1 && row.regularization_shift_type && row.regularization_shift_type !== 'FullDay') {
+                        if (row.regularization_shift_type !== regHalf) {
+                            finalRegShift = 'FullDay';
+                        }
+                    }
+
+                    // Check if other half is covered by physical work (shift_type), leave, or PREVIOUS regularization
+                    const isFirstHalfCovered = (
+                        row.shift_type === 'FirstHalf' || 
+                        row.shift_type === 'FullDay' || 
+                        (row.is_leave === 1 && row.leave_shift_type === 'FirstHalf') ||
+                        (row.is_regularized === 1 && row.regularization_shift_type === 'FirstHalf')
+                    );
+                    
+                    const isSecondHalfCovered = (
+                        row.shift_type === 'SecondHalf' || 
+                        row.shift_type === 'FullDay' || 
+                        (row.is_leave === 1 && row.leave_shift_type === 'SecondHalf') ||
+                        (row.is_regularized === 1 && row.regularization_shift_type === 'SecondHalf')
+                    );
 
                     if ((regHalf === 'FirstHalf' && isSecondHalfCovered) || 
-                        (regHalf === 'SecondHalf' && isFirstHalfCovered)) {
+                        (regHalf === 'SecondHalf' && isFirstHalfCovered) ||
+                        (finalRegShift === 'FullDay')) {
                         deduction = 0.00;
                     }
                 }
@@ -316,7 +376,7 @@ class AttendanceModel {
                      SET is_regularized = 1, deduction_days = ?, status = 'Present', is_regularize_type = 'Regularization',
                          regularization_shift_type = ?
                      WHERE employee_id = ? AND date = ?`,
-                    [deduction, adj.regularization_shift_type, adj.employee_id, adj.date]
+                    [deduction, finalRegShift, adj.employee_id, adj.date]
                 );
             } else if (adj.request_type === 'OnDuty') {
                 // Update attendance_daily for On-Duty

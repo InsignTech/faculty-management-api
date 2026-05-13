@@ -177,6 +177,7 @@ class ReportModel {
                     deduction_days: dayAttendance ? parseFloat(dayAttendance.deduction_days) : (status === 'Absent' ? 1.00 : 0.00),
                     shift_type: dayAttendance ? dayAttendance.shift_type : null,
                     is_regularized: dayAttendance ? dayAttendance.is_regularized : 0,
+                    is_regularize_type: dayAttendance ? dayAttendance.is_regularize_type : null,
                     regularization_shift_type: dayAttendance ? dayAttendance.regularization_shift_type : null,
                     is_leave: dayAttendance ? dayAttendance.is_leave : (empLeave ? 1 : 0),
                     is_leave_type: dayAttendance ? dayAttendance.is_leave_type : (empLeave ? empLeave.leave_type : null),
