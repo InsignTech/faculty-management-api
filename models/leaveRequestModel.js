@@ -139,114 +139,48 @@ class LeaveRequestModel {
    * CALCULATE LEAVE BALANCE
    * Handles: Yearly/Monthly accumulation, carry forward from prior period
    */
+  /**
+   * CALCULATE LEAVE BALANCE
+   * Now fetches from the employee_leaves table which is maintained by the accrual job and approval/cancellation SPs.
+   */
   static async getLeaveBalance(employeeId, date = new Date()) {
-    // 1. Get the effective policy for this employee
-    const policy = await LeavePolicyModel.getEffectivePolicy(employeeId, date);
-    if (!policy) return [];
+    const d = new Date(date);
+    const monthYear = `${String(d.getMonth() + 1).padStart(2, '0')}-${d.getFullYear()}`;
 
-    const policyValue = policy.policy_value || [];
-    const policyStart = new Date(policy.start_date);
-    const policyEnd = policy.end_date ? new Date(policy.end_date) : null;
-
-    const policyYear = policyStart.getFullYear();
-
-    // 2. Get leaves used in current policy year — split by status.
-    // Using YEAR() instead of strict date range to avoid UTC/IST timezone shifts
-    // where a Jan 1 IST leave gets stored as Dec 31 UTC and gets excluded.
-    const [leavesTaken] = await pool.execute(
-      `SELECT leave_type, status, SUM(total_days) as taken 
-       FROM leave_requests 
-       WHERE employee_id = ? 
-         AND status IN ('Approved', 'Pending')
-         AND YEAR(start_date) = ?
-       GROUP BY leave_type, status`,
-      [employeeId, policyYear]
+    const [rows] = await pool.execute(
+      `SELECT leave_type, opening_leave, credited_count, leaves_taken, total_leaves, balance_leave
+       FROM employee_leaves 
+       WHERE emp_id = ? AND month_year = ?`,
+      [employeeId, monthYear]
     );
 
-    // Build separate maps for approved and pending
-    // Use += accumulation to safely handle multiple rows per type
-    const approvedMap = {};
-    const pendingMap = {};
-    leavesTaken.forEach(row => {
-      const days = parseFloat(row.taken) || 0;
-      if (row.status === 'Approved') approvedMap[row.leave_type] = (approvedMap[row.leave_type] || 0) + days;
-      if (row.status === 'Pending')  pendingMap[row.leave_type]  = (pendingMap[row.leave_type]  || 0) + days;
-    });
-
-    // 3. Get carry-forward from the PREVIOUS policy period (if applicable)
-    // Find the prior active policy that ended before this one started
-    const [priorPolicies] = await pool.execute(
-      `SELECT * FROM leave_policy 
-       WHERE end_date < ? AND (active = 1 OR leave_policy_id != ?)
-       ORDER BY end_date DESC LIMIT 1`,
-      [policy.start_date, policy.leave_policy_id]
-    );
-
-    const carryForwardMap = {};
-    if (priorPolicies.length > 0) {
-      const priorPolicy = priorPolicies[0];
-      const priorPolicyValue = JSON.parse(priorPolicy.policy_value || '[]');
-
-      // Get what was used in the prior period
-      const [priorTaken] = await pool.execute(
-        `SELECT leave_type, SUM(total_days) as taken 
-         FROM leave_requests 
-         WHERE employee_id = ? AND status = 'Approved' 
-           AND start_date >= ? AND end_date <= ?
-         GROUP BY leave_type`,
-        [employeeId, priorPolicy.start_date, priorPolicy.end_date]
-      );
-      const priorTakenMap = priorTaken.reduce((acc, curr) => {
-        acc[curr.leave_type] = parseFloat(curr.taken);
-        return acc;
-      }, {});
-
-      // Carry forward = prior allocated - prior used (only for types with carryForward enabled)
-      priorPolicyValue.forEach(item => {
-        if (item.carryForward) {
-          const priorAllocated = parseFloat(item.leaveCount);
-          const priorUsed = priorTakenMap[item.leaveType] || 0;
-          const surplus = Math.max(0, priorAllocated - priorUsed);
-          if (surplus > 0) carryForwardMap[item.leaveType] = surplus;
-        }
-      });
+    if (rows.length === 0) {
+        // Fallback or initialization if no records exist yet
+        const policy = await LeavePolicyModel.getEffectivePolicy(employeeId, date);
+        if (!policy) return [];
+        return policy.policy_value.map(item => ({
+            leaveType: item.leaveType,
+            totalAllocated: parseFloat(item.leaveCount),
+            opening: 0,
+            credited: 0,
+            used: 0,
+            available: 0,
+            strategy: item.creditFrequency || item.cappingType
+        }));
     }
 
-    // 4. Calculate current entitlement
-    const now = new Date();
-    const balance = policyValue.map(item => {
-      let allocated = parseFloat(item.leaveCount);
-
-      if (item.cappingType === 'Monthly') {
-        // +1 to include the current month (so day 1 of the policy = 1 month earned)
-        const monthsElapsed = (now.getFullYear() - policyStart.getFullYear()) * 12
-          + (now.getMonth() - policyStart.getMonth()) + 1;
-        const earnedPerMonth = parseFloat(item.cappingCount || 0);
-        allocated = Math.min(allocated, monthsElapsed * earnedPerMonth);
-      }
-
-      // Add carry-forward on top, capped so total doesn't exceed leaveCount * 2
-      const carried = carryForwardMap[item.leaveType] || 0;
-      const maxWithCarry = parseFloat(item.leaveCount) * 2;
-      const effectiveAllocated = Math.min(allocated + carried, maxWithCarry);
-
-      const approved = approvedMap[item.leaveType] || 0;
-      const pending  = pendingMap[item.leaveType]  || 0;
-      const totalDeducted = approved + pending;
-
-      return {
-        leaveType: item.leaveType,
-        totalAllocated: parseFloat(item.leaveCount),
-        carryForward: carried,
-        currentlyEarned: effectiveAllocated,
-        used: approved,           // Only approved leaves count as "used"
-        pending: pending,         // Pending days reserved but not yet confirmed
-        available: Math.max(0, effectiveAllocated - totalDeducted), // Pending reserves days
-        strategy: item.cappingType
-      };
-    });
-
-    return balance;
+    return rows.map(row => ({
+      leaveType: row.leave_type,
+      opening: parseFloat(row.opening_leave),
+      credited: parseFloat(row.credited_count),
+      used: parseFloat(row.leaves_taken),
+      total: parseFloat(row.total_leaves),
+      available: parseFloat(row.balance_leave),
+      currentlyEarned: parseFloat(row.total_leaves), // total = opening + credited
+      totalAllocated: parseFloat(row.total_leaves), // for now, show total as allocated
+      carryForward: parseFloat(row.opening_leave),
+      strategy: 'Table-Based'
+    }));
   }
 }
 

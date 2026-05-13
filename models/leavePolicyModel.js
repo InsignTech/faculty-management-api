@@ -141,13 +141,13 @@ class LeavePolicyModel {
     const roleId = empRows[0].role_id;
 
     // 2. Fetch the most relevant Global Policy
-    // Priority: Active = 1, otherwise the one that covers the current date
+    // Priority: Active = 1, otherwise the one that covers the current date, else first one
     const [globalPolicies] = await pool.execute(`
       SELECT *, policy_value 
       FROM leave_policy 
-      WHERE active = 1 
-      OR (CURDATE() BETWEEN start_date AND COALESCE(end_date, '9999-12-31'))
-      ORDER BY active DESC, start_date DESC 
+      ORDER BY active DESC, 
+               (CURDATE() BETWEEN start_date AND COALESCE(end_date, '9999-12-31')) DESC, 
+               start_date DESC 
       LIMIT 1
     `);
 
@@ -186,6 +186,81 @@ class LeavePolicyModel {
       start_date: globalPolicy.start_date,
       end_date: globalPolicy.end_date
     };
+  }
+
+  static async calculateAccrual() {
+    // 1. Get all active employees
+    const [employees] = await pool.execute('SELECT employee_id FROM employee WHERE active = 1');
+    const now = new Date();
+    const currentMonth = now.getMonth() + 1; // 1-12
+    const currentYear = now.getFullYear();
+    const monthYear = `${String(currentMonth).padStart(2, '0')}-${currentYear}`;
+    
+    // Calculate previous month for carry forward
+    const prevDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const prevMonthYear = `${String(prevDate.getMonth() + 1).padStart(2, '0')}-${prevDate.getFullYear()}`;
+
+    for (const emp of employees) {
+      const empId = emp.employee_id;
+      const effectivePolicy = await this.getEffectivePolicy(empId);
+      if (!effectivePolicy) continue;
+
+      const policyValue = effectivePolicy.policy_value || [];
+      
+      for (const item of policyValue) {
+        const leaveType = item.leaveType;
+        let creditAmount = 0;
+
+        const freq = item.creditFrequency || item.cappingType;
+        
+        if (freq === 'Monthly') {
+          creditAmount = parseFloat(item.cappingCount || 0);
+        } else if (freq === 'Quarterly') {
+          const quarterLimit = parseInt(item.quarterLimit) || 3;
+          if (currentMonth % quarterLimit === 1) { 
+            creditAmount = parseFloat(item.cappingCount || 0);
+          }
+        } else if (freq === 'Half Yearly') {
+          if (currentMonth === 1 || currentMonth === 7) {
+            creditAmount = parseFloat(item.cappingCount || 0);
+          }
+        } else if (freq === 'Yearly') {
+          if (currentMonth === 1) { 
+            creditAmount = parseFloat(item.leaveCount || 0);
+          }
+        }
+
+        // --- CARRY FORWARD / IDEMPOTENT CREDIT LOGIC ---
+        // 1. Check for previous month's balance to carry forward
+        const [prevRecord] = await pool.execute(
+          'SELECT balance_leave FROM employee_leaves WHERE emp_id = ? AND leave_type = ? AND month_year = ?',
+          [empId, leaveType, prevMonthYear]
+        );
+        
+        let openingLeave = 0;
+        if (prevRecord.length > 0) {
+            openingLeave = parseFloat(prevRecord[0].balance_leave);
+        } else {
+            // Initial Catch-up: If no history, credit full amount for setup
+            if (creditAmount === 0) {
+                creditAmount = (freq === 'Yearly') ? parseFloat(item.leaveCount || 0) : parseFloat(item.cappingCount || 0);
+            }
+        }
+
+        // 2. Perform Upsert (Insert or Update if already exists)
+        // If re-running, this will update the credited_count to the latest policy value
+        if (creditAmount > 0 || openingLeave > 0) {
+          await pool.execute(`
+            INSERT INTO employee_leaves (emp_id, leave_type, month_year, opening_leave, credited_count, leaves_taken)
+            VALUES (?, ?, ?, ?, ?, 0)
+            ON DUPLICATE KEY UPDATE 
+              credited_count = VALUES(credited_count),
+              opening_leave = VALUES(opening_leave)
+          `, [empId, leaveType, monthYear, openingLeave, creditAmount]);
+        }
+      }
+    }
+    return true;
   }
 }
 

@@ -101,12 +101,13 @@ class LeaveModel {
             SELECT
                 lr.*,
                 e.employee_name,
-                e.employee_code  AS emp_code,
-                e.designation_id,
+                e.employee_code,
+                des.designation AS employee_designation,
                 d.departmentname AS department_name
             FROM leave_requests lr
             JOIN employee e ON lr.employee_id = e.employee_id
             LEFT JOIN department d ON e.department_id = d.department_id
+            LEFT JOIN designation des ON e.designation_id = des.designation_id
             WHERE 1=1
         `;
         const params = [];

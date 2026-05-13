@@ -62,7 +62,43 @@ proc: BEGIN
         rejection_reason = IF(p_action = 'Rejected', p_rejection_reason, NULL)
     WHERE leave_request_id = p_leave_request_id;
 
-    -- ─── If rejected, nothing more to do ─────────────────────────────────────
+    -- ── Phase 1: Validation Loop (Check for conflicts BEFORE updating balance) ──
+    SET v_current_date = v_start_date;
+    validation_loop: WHILE v_current_date <= v_end_date DO
+        SET @is_reg = 0;
+        SET @reg_shift = NULL;
+
+        SELECT is_regularized, regularization_shift_type 
+        INTO @is_reg, @reg_shift
+        FROM   attendance_daily
+        WHERE  employee_id = v_emp_id AND date = v_current_date
+        LIMIT  1;
+
+        IF @is_reg = 1 THEN
+            IF @reg_shift = 'FullDay' THEN
+                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Conflict: One or more days are already fully regularized';
+            END IF;
+
+            IF @reg_shift = v_leave_half AND v_leave_half != 'FullDay' THEN
+                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Conflict: This half of the day is already regularized';
+            END IF;
+        END IF;
+
+        SET v_current_date = DATE_ADD(v_current_date, INTERVAL 1 DAY);
+    END WHILE;
+
+    -- ── Phase 2: Update employee_leaves table (Safe now because Phase 1 passed) ──
+    IF p_action = 'Approved' THEN
+        SET @v_total_days = 0;
+        SELECT total_days INTO @v_total_days FROM leave_requests WHERE leave_request_id = p_leave_request_id;
+        
+        INSERT INTO employee_leaves (emp_id, leave_type, month_year, opening_leave, credited_count, leaves_taken)
+        VALUES (v_emp_id, v_leave_type, DATE_FORMAT(NOW(), '%m-%Y'), 0, 0, @v_total_days)
+        ON DUPLICATE KEY UPDATE 
+            leaves_taken = leaves_taken + @v_total_days;
+    END IF;
+
+    -- ── If rejected, nothing more to do ─────────────────────────────────────
     IF p_action = 'Rejected' THEN
         SELECT
             p_leave_request_id AS leave_request_id,
@@ -70,26 +106,19 @@ proc: BEGIN
         LEAVE proc;
     END IF;
 
-    -- ─────────────────────────────────────────────────────────────────────────
-    -- ─── Approved: update attendance_daily for every day in the range ────────
-    -- ─────────────────────────────────────────────────────────────────────────
+    -- ── Phase 3: Update attendance_daily ─────────────────────────────────────
     SET v_current_date = v_start_date;
-
     date_loop: WHILE v_current_date <= v_end_date DO
+        -- Read existing data for merge logic
+        SET @is_reg = 0;
+        SET @reg_shift = NULL;
+        SET @cur_shift = NULL;
 
-        -- ── Skip already regularized days ────────────────────────────────────
-        SET @is_regularized = 0;
-
-        SELECT is_regularized INTO @is_regularized
+        SELECT is_regularized, regularization_shift_type, shift_type
+        INTO @is_reg, @reg_shift, @cur_shift
         FROM   attendance_daily
-        WHERE  employee_id = v_emp_id
-          AND  date        = v_current_date
+        WHERE  employee_id = v_emp_id AND date = v_current_date
         LIMIT  1;
-
-        IF @is_regularized = 1 THEN
-            SET v_current_date = DATE_ADD(v_current_date, INTERVAL 1 DAY);
-            ITERATE date_loop;
-        END IF;
 
         -- ── Skip weekends and holidays ────────────────────────────────────────
         SET @holiday_type    = NULL;
@@ -193,14 +222,12 @@ proc: BEGIN
         -- ─────────────────────────────────────────────────────────────────────
         ELSEIF v_leave_half = 'FirstHalf' THEN
 
-            -- If second half also worked → FullDay Present, 0 deduction
-            -- If second half not worked  → FirstHalf Leave, 0.5 deduction
-            SET @final_shift  = IF(@cur_shift IN ('SecondHalf','FullDay'),
-                                   'FullDay', 'FirstHalf');
-            SET @final_status = IF(@cur_shift IN ('SecondHalf','FullDay'),
-                                   'Present', 'Leave');
-            SET @final_deduct = IF(@cur_shift IN ('SecondHalf','FullDay'),
-                                   0, 0.5);
+            -- Logic: If second half is covered by Physical Punch OR Regularization
+            SET @is_second_covered = IF(@cur_shift IN ('SecondHalf','FullDay') OR (@is_reg = 1 AND @reg_shift = 'SecondHalf'), 1, 0);
+            
+            SET @final_shift  = IF(@is_second_covered = 1, 'FullDay', 'FirstHalf');
+            SET @final_status = IF(@is_second_covered = 1, 'Present', 'Leave');
+            SET @final_deduct = IF(@is_second_covered = 1, 0, 0.5);
 
             INSERT INTO attendance_daily (
                 employee_id, date,
@@ -210,7 +237,7 @@ proc: BEGIN
                 is_early_leaving, early_minutes,
                 overtime_minutes, deduction_days,
                 is_worked_on_holiday,
-                is_regularized, is_regularize_type,
+                is_regularized, is_regularize_type, regularization_shift_type,
                 is_leave, is_leave_type, leave_shift_type
             )
             VALUES (
@@ -219,19 +246,13 @@ proc: BEGIN
                 @final_shift, @final_status,
                 0, 0, 0, 0, 0,
                 @final_deduct,
-                0, 0, NULL,
+                0, @is_reg, NULL, @reg_shift,
                 1, v_leave_type, v_leave_half
             )
             ON DUPLICATE KEY UPDATE
                 shift_type         = @final_shift,
                 status             = @final_status,
-                is_late            = 0,
-                late_minutes       = 0,
-                is_early_leaving   = 0,
-                early_minutes      = 0,
                 deduction_days     = @final_deduct,
-                is_regularized     = 0,
-                is_regularize_type = NULL,
                 is_leave           = 1,
                 is_leave_type      = v_leave_type,
                 leave_shift_type   = v_leave_half;
@@ -241,14 +262,12 @@ proc: BEGIN
         -- ─────────────────────────────────────────────────────────────────────
         ELSEIF v_leave_half = 'SecondHalf' THEN
 
-            -- If first half also worked → FullDay Present, 0 deduction
-            -- If first half not worked  → SecondHalf Leave, 0.5 deduction
-            SET @final_shift  = IF(@cur_shift IN ('FirstHalf','FullDay'),
-                                   'FullDay', 'SecondHalf');
-            SET @final_status = IF(@cur_shift IN ('FirstHalf','FullDay'),
-                                   'Present', 'Leave');
-            SET @final_deduct = IF(@cur_shift IN ('FirstHalf','FullDay'),
-                                   0, 0.5);
+            -- Logic: If first half is covered by Physical Punch OR Regularization
+            SET @is_first_covered = IF(@cur_shift IN ('FirstHalf','FullDay') OR (@is_reg = 1 AND @reg_shift = 'FirstHalf'), 1, 0);
+
+            SET @final_shift  = IF(@is_first_covered = 1, 'FullDay', 'SecondHalf');
+            SET @final_status = IF(@is_first_covered = 1, 'Present', 'Leave');
+            SET @final_deduct = IF(@is_first_covered = 1, 0, 0.5);
 
             INSERT INTO attendance_daily (
                 employee_id, date,
@@ -258,7 +277,7 @@ proc: BEGIN
                 is_early_leaving, early_minutes,
                 overtime_minutes, deduction_days,
                 is_worked_on_holiday,
-                is_regularized, is_regularize_type,
+                is_regularized, is_regularize_type, regularization_shift_type,
                 is_leave, is_leave_type, leave_shift_type
             )
             VALUES (
@@ -267,22 +286,17 @@ proc: BEGIN
                 @final_shift, @final_status,
                 0, 0, 0, 0, 0,
                 @final_deduct,
-                0, 0, NULL,
+                0, @is_reg, NULL, @reg_shift,
                 1, v_leave_type, v_leave_half
             )
             ON DUPLICATE KEY UPDATE
                 shift_type         = @final_shift,
                 status             = @final_status,
-                is_late            = 0,
-                late_minutes       = 0,
-                is_early_leaving   = 0,
-                early_minutes      = 0,
                 deduction_days     = @final_deduct,
-                is_regularized     = 0,
-                is_regularize_type = NULL,
                 is_leave           = 1,
                 is_leave_type      = v_leave_type,
                 leave_shift_type   = v_leave_half;
+        END IF;
 
         END IF;
 

@@ -10,7 +10,8 @@ const {
   saveRolePolicy,
   getEmployeePolicy,
   saveEmployeePolicy,
-  getEffectivePolicy
+  getEffectivePolicy,
+  calculateAccrual
 } = require('../controllers/leavePolicyController');
 
 // System Level
@@ -30,5 +31,8 @@ router.post('/employee', saveEmployeePolicy);
 
 // Effective Policy (Merged)
 router.get('/effective/:id', getEffectivePolicy);
+
+// Job / Manual Trigger
+router.post('/calculate-accrual', calculateAccrual);
 
 module.exports = router;

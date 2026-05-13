@@ -279,7 +279,37 @@ class AttendanceModel {
                     console.error('Error fetching regularization limit setting:', err);
                 }
 
-                const deduction = approvedCount < limit ? 0.00 : 0.50;
+                // Fetch existing status (Leaves AND Physical Punches)
+                const [existingStatus] = await conn.execute(
+                    `SELECT is_leave, leave_shift_type, shift_type FROM attendance_daily 
+                     WHERE employee_id = ? AND date = ?`,
+                    [adj.employee_id, adj.date]
+                );
+
+                // Logic: Proportional Deduction
+                // Start by assuming the other half is absent (0.50 deduction)
+                let deduction = (adj.regularization_shift_type === 'FullDay') ? 0.00 : 0.50;
+                
+                if (existingStatus.length > 0) {
+                    const row = existingStatus[0];
+                    const regHalf = adj.regularization_shift_type;
+                    
+                    // Check if other half is covered by physical work (shift_type) or leave
+                    const isFirstHalfCovered = (row.shift_type === 'FirstHalf' || row.shift_type === 'FullDay' || (row.is_leave === 1 && row.leave_shift_type === 'FirstHalf'));
+                    const isSecondHalfCovered = (row.shift_type === 'SecondHalf' || row.shift_type === 'FullDay' || (row.is_leave === 1 && row.leave_shift_type === 'SecondHalf'));
+
+                    if ((regHalf === 'FirstHalf' && isSecondHalfCovered) || 
+                        (regHalf === 'SecondHalf' && isFirstHalfCovered)) {
+                        deduction = 0.00;
+                    }
+                }
+
+                // If they exceed the limit, add penalty
+                if (approvedCount >= limit) {
+                    deduction += 0.50;
+                }
+                
+                if (deduction > 1.0) deduction = 1.0;
 
                 await conn.execute(
                     `UPDATE attendance_daily 

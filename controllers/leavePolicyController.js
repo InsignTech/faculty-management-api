@@ -178,6 +178,15 @@ const getEffectivePolicy = async (req, res, next) => {
   }
 };
 
+const calculateAccrual = async (req, res, next) => {
+  try {
+    await LeavePolicyModel.calculateAccrual();
+    sendResponse(res, 200, 'Leave accrual calculation completed successfully');
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getSystemPolicies,
   createSystemPolicy,
@@ -188,5 +197,6 @@ module.exports = {
   saveRolePolicy,
   getEmployeePolicy,
   saveEmployeePolicy,
-  getEffectivePolicy
+  getEffectivePolicy,
+  calculateAccrual
 };
