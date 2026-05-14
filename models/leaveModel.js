@@ -44,37 +44,50 @@ class LeaveModel {
 
         const halfType = leave_half_type || 'FullDay';
 
-        const [rows] = await pool.execute(
-            'CALL sp_apply_leave(?, ?, ?, ?, ?, ?, ?)',
-            [
-                employee_id,
-                leave_type,
-                start_date,
-                end_date,
-                halfType,
-                reason,
-                attachment_path || null
-            ]
-        );
-        
-        const result = rows[0][0];
+        const conn = await pool.getConnection();
+        try {
+            await conn.beginTransaction();
 
-        // Safety net for half-days
-        if (result && result.leave_request_id && (!result.total_days || result.total_days == 0)) {
-            if (halfType !== 'FullDay') {
-                await pool.execute(
-                    'UPDATE leave_requests SET total_days = 0.5 WHERE leave_request_id = ?',
-                    [result.leave_request_id]
-                );
-            } else if (total_days > 0) {
-                await pool.execute(
-                    'UPDATE leave_requests SET total_days = ? WHERE leave_request_id = ?',
-                    [total_days, result.leave_request_id]
-                );
+            const [rows] = await conn.execute(
+                'CALL sp_apply_leave(?, ?, ?, ?, ?, ?, ?)',
+                [
+                    employee_id,
+                    leave_type,
+                    start_date,
+                    end_date,
+                    halfType,
+                    reason,
+                    attachment_path || null
+                ]
+            );
+            
+            const result = rows[0][0];
+
+            // Safety net for half-days
+            if (result && result.leave_request_id && (!result.total_days || result.total_days == 0)) {
+                if (halfType !== 'FullDay') {
+                    await conn.execute(
+                        'UPDATE leave_requests SET total_days = 0.5 WHERE leave_request_id = ?',
+                        [result.leave_request_id]
+                    );
+                    result.total_days = 0.5;
+                } else if (total_days > 0) {
+                    await conn.execute(
+                        'UPDATE leave_requests SET total_days = ? WHERE leave_request_id = ?',
+                        [total_days, result.leave_request_id]
+                    );
+                    result.total_days = total_days;
+                }
             }
-        }
 
-        return result;
+            await conn.commit();
+            return result;
+        } catch (err) {
+            await conn.rollback();
+            throw err;
+        } finally {
+            conn.release();
+        }
     }
 
     /**

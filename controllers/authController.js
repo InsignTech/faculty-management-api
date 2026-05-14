@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const UserModel = require('../models/userModel');
@@ -87,8 +88,8 @@ const requestOTP = async (req, res, next) => {
             return next(new ErrorResponse('The provided email is not registered.', 404, 'NOT_FOUND'));
         }
 
-        // Generate 6-digit OTP
-        const otp = Math.floor(100000 + Math.random() * 900000);
+        // Generate 6-digit OTP (cryptographically secure)
+        const otp = crypto.randomInt(100000, 1000000);
         
         await UserModel.updateOTP(email, otp);
 

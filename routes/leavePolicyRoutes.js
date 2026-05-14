@@ -11,7 +11,8 @@ const {
   getEmployeePolicy,
   saveEmployeePolicy,
   getEffectivePolicy,
-  calculateAccrual
+  calculateAccrual,
+  getPolicyHistory
 } = require('../controllers/leavePolicyController');
 
 // System Level
@@ -20,6 +21,8 @@ router.post('/system', createSystemPolicy);
 router.put('/system/:id', updateSystemPolicy);
 router.put('/system/:id/activate', setActiveSystemPolicy);
 router.delete('/system/:id', deleteSystemPolicy);
+router.get('/history', getPolicyHistory);
+router.get('/history/:id', getPolicyHistory);
 
 // Role Level
 router.get('/role/:id', getRolePolicy);

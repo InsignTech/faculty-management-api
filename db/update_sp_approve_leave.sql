@@ -67,13 +67,16 @@ proc: BEGIN
     validation_loop: WHILE v_current_date <= v_end_date DO
         SET @is_reg = 0;
         SET @reg_shift = NULL;
+        SET @is_leave = 0;
+        SET @leave_shift = NULL;
 
-        SELECT is_regularized, regularization_shift_type 
-        INTO @is_reg, @reg_shift
+        SELECT is_regularized, regularization_shift_type, is_leave, leave_shift_type 
+        INTO @is_reg, @reg_shift, @is_leave, @leave_shift
         FROM   attendance_daily
         WHERE  employee_id = v_emp_id AND date = v_current_date
-        LIMIT  1;
+        FOR UPDATE;
 
+        -- Check Regularization Conflict
         IF @is_reg = 1 THEN
             IF @reg_shift = 'FullDay' THEN
                 SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Conflict: One or more days are already fully regularized';
@@ -81,6 +84,27 @@ proc: BEGIN
 
             IF @reg_shift = v_leave_half AND v_leave_half != 'FullDay' THEN
                 SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Conflict: This half of the day is already regularized';
+            END IF;
+            
+            -- If we are applying for FullDay but one half is regularized, should we block?
+            -- Usually yes, or the user should regularize the other half instead of a full leave.
+            IF v_leave_half = 'FullDay' AND @reg_shift != 'FullDay' THEN
+                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Conflict: A part of this day is already regularized. Cannot apply full-day leave.';
+            END IF;
+        END IF;
+
+        -- Check Leave Conflict
+        IF @is_leave = 1 THEN
+            IF @leave_shift = 'FullDay' THEN
+                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Conflict: One or more days already have an approved leave';
+            END IF;
+
+            IF @leave_shift = v_leave_half AND v_leave_half != 'FullDay' THEN
+                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Conflict: An approved leave already exists for this half-day';
+            END IF;
+
+            IF v_leave_half = 'FullDay' AND @leave_shift != 'FullDay' THEN
+                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Conflict: A part of this day already has an approved leave. Cannot apply full-day leave.';
             END IF;
         END IF;
 

@@ -27,7 +27,7 @@ const router = express.Router();
  *       400:
  *         description: Validation error
  */
-router.post('/signup', signup);
+// router.post('/signup', signup); // Disabled for security - use Admin Panel
 
 /**
  * @swagger

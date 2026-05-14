@@ -112,27 +112,32 @@ class ReportModel {
                 let remark = '';
 
                 if (dayAttendance) {
-                    const isOnduty = dayAttendance.is_regularize_type === 'OnDuty';
                     const hasPunchIn = dayAttendance.first_in_time;
                     const hasPunchOut = dayAttendance.last_out_time;
 
                     // Mixed Status Logic
-                    const isReg = Number(dayAttendance.is_regularized) === 1;
-                    const isLeave = Number(dayAttendance.is_leave) === 1 || dayAttendance.status === 'Leave';
+                    const isReg = dayAttendance.regularization_shift_type !== null;
+                    const isOD = dayAttendance.onduty_shift_type !== null;
+                    const isLeave = Number(dayAttendance.is_leave) === 1 || dayAttendance.status === 'Leave' || dayAttendance.leave_shift_type !== null;
 
-                    if (isReg && isLeave) {
+                    if ((isReg || isOD) && isLeave) {
                         status = 'Regularized + Leave';
-                        remark = `${dayAttendance.is_leave_type || 'Leave'}${isOnduty ? ' (OD)' : ''}`;
+                        remark = `${dayAttendance.is_leave_type || 'Leave'}${isOD ? ' (OD)' : (isReg ? ' (Reg)' : '')}`;
                     }
                     // If it's a processed non-working day, respect that status
                     else if (['WeekEnd', 'Public Holiday', 'Exceptional Holiday', 'Vacation', 'Leave'].includes(dayAttendance.status)) {
                         status = dayAttendance.status === 'WeekEnd' ? 'Weekly Off' : dayAttendance.status;
                         remark = dayAttendance.status;
                     } 
+                    // Priority: On Duty
+                    else if (isOD) {
+                        status = 'Regularized';
+                        remark = 'On Duty';
+                    }
                     // Priority: Regularized
                     else if (isReg) {
                         status = 'Regularized';
-                        remark = isOnduty ? 'On Duty' : '';
+                        remark = 'Regularized';
                     } 
                     // Irregular (Late/Early)
                     else if (dayAttendance.is_late === 1 || dayAttendance.is_early_leaving === 1) {
@@ -146,8 +151,6 @@ class ReportModel {
                     else {
                         status = 'Present';
                     }
-
-                    if (isOnduty && !isLeave) remark = 'On Duty';
                 } else if (empLeave) {
                     status = 'Leave';
                     remark = empLeave.leave_type;
@@ -164,7 +167,7 @@ class ReportModel {
                     employee_id: emp.employee_id,
                     employee_code: emp.employee_code,
                     employee_name: emp.employee_name,
-                    department: emp.departmentname,
+                    department: emp.department, // Fixed from emp.departmentname
                     date: dateStr,
                     status: status,
                     remark: remark,
@@ -176,10 +179,9 @@ class ReportModel {
                     overtime_minutes: dayAttendance ? dayAttendance.overtime_minutes : 0,
                     deduction_days: dayAttendance ? parseFloat(dayAttendance.deduction_days) : (status === 'Absent' ? 1.00 : 0.00),
                     shift_type: dayAttendance ? dayAttendance.shift_type : null,
-                    is_regularized: dayAttendance ? dayAttendance.is_regularized : 0,
-                    is_regularize_type: dayAttendance ? dayAttendance.is_regularize_type : null,
                     regularization_shift_type: dayAttendance ? dayAttendance.regularization_shift_type : null,
-                    is_leave: dayAttendance ? dayAttendance.is_leave : (empLeave ? 1 : 0),
+                    onduty_shift_type: dayAttendance ? dayAttendance.onduty_shift_type : null,
+                    is_leave: dayAttendance ? (dayAttendance.is_leave || (dayAttendance.leave_shift_type ? 1 : 0)) : (empLeave ? 1 : 0),
                     is_leave_type: dayAttendance ? dayAttendance.is_leave_type : (empLeave ? empLeave.leave_type : null),
                     leave_shift_type: dayAttendance ? dayAttendance.leave_shift_type : (empLeave ? empLeave.leave_half_type : null)
                 });

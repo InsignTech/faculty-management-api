@@ -178,9 +178,25 @@ const getEffectivePolicy = async (req, res, next) => {
   }
 };
 
+const getPolicyHistory = async (req, res, next) => {
+  try {
+    const history = await LeavePolicyModel.getPolicyHistory(req.params.id || null);
+    sendResponse(res, 200, 'Policy history fetched successfully', history);
+  } catch (error) {
+    next(error);
+  }
+};
+
 const calculateAccrual = async (req, res, next) => {
   try {
-    await LeavePolicyModel.calculateAccrual();
+    const dryRun = req.query.dryRun === 'true';
+    const targetDate = req.query.date || null;
+    const result = await LeavePolicyModel.calculateAccrual(dryRun, targetDate);
+    
+    if (dryRun) {
+      return sendResponse(res, 200, 'Dry run completed successfully', result);
+    }
+    
     sendResponse(res, 200, 'Leave accrual calculation completed successfully');
   } catch (error) {
     next(error);
@@ -198,5 +214,6 @@ module.exports = {
   getEmployeePolicy,
   saveEmployeePolicy,
   getEffectivePolicy,
-  calculateAccrual
+  calculateAccrual,
+  getPolicyHistory
 };

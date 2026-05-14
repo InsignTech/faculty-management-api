@@ -22,6 +22,7 @@ const pool = require('./config/db');
 
 // Initialize Cron Jobs
 require('./cron/attendanceCron');
+require('./cron/leaveCron');
 
 debugLog("Step 2: Deployment timestamp...");
 console.log("🔥 NEW DEPLOY -", new Date().toISOString());

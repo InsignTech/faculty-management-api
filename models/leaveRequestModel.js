@@ -57,6 +57,7 @@ class LeaveRequestModel {
     }
 
     // 2. Overlap Validation (Smart Half-Day Aware)
+    // Check against other leave requests
     const [overlaps] = await pool.execute(
       `SELECT start_date, end_date, leave_half_type, status 
        FROM leave_requests 
@@ -68,17 +69,38 @@ class LeaveRequestModel {
 
     if (overlaps.length > 0) {
       const isConflict = overlaps.some(existing => {
-        // If existing is FullDay, it always conflicts
         if (existing.leave_half_type === 'FullDay') return true;
-        // If new is FullDay, it conflicts with any existing on that date
         if (halfType === 'FullDay') return true;
-        // If both are the same half, they conflict
         if (existing.leave_half_type === halfType) return true;
         return false;
       });
 
       if (isConflict) {
         throw new Error('Leave request overlaps with an existing pending or approved leave.');
+      }
+    }
+
+    // Check against approved adjustments (Regularization/On-Duty) in attendance_daily
+    const [adjOverlaps] = await pool.execute(
+      `SELECT date, regularization_shift_type, onduty_shift_type 
+       FROM attendance_daily 
+       WHERE employee_id = ? 
+         AND (date BETWEEN ? AND ?)
+         AND (regularization_shift_type IS NOT NULL OR onduty_shift_type IS NOT NULL)`,
+      [employee_id, start_date, end_date]
+    );
+
+    if (adjOverlaps.length > 0) {
+      const isAdjConflict = adjOverlaps.some(adj => {
+        const adjShift = adj.regularization_shift_type || adj.onduty_shift_type;
+        if (adjShift === 'FullDay') return true;
+        if (halfType === 'FullDay') return true;
+        if (adjShift === halfType) return true;
+        return false;
+      });
+
+      if (isAdjConflict) {
+        throw new Error('Leave request overlaps with an approved regularization or on-duty shift.');
       }
     }
 

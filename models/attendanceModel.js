@@ -147,19 +147,19 @@ class AttendanceModel {
         // Single Date Logic (Regularization or single-day On-Duty)
         const targetDate = date || from_date;
 
-        // 1. Duplicate Regularization Check
-        const [regDuplicates] = await pool.query(
-            `SELECT status, regularization_shift_type FROM attendance_regularization 
-             WHERE employee_id = ? AND date = ? AND request_type = ? AND status IN ('Pending', 'Approved')`,
-            [employee_id, targetDate, type]
+        // 1. Cross-Type Adjustment Check (Regularization or On-Duty)
+        const [adjDuplicates] = await pool.query(
+            `SELECT status, request_type, regularization_shift_type FROM attendance_regularization 
+             WHERE employee_id = ? AND date = ? AND status IN ('Pending', 'Approved')`,
+            [employee_id, targetDate]
         );
 
-        if (regDuplicates.length > 0) {
-            const requestedShift = regularization_shift_type || 'FullDay';
-            for (const dup of regDuplicates) {
-                // Block if already a FullDay exists, OR if requesting FullDay, OR if specific half matches
+        const requestedShift = regularization_shift_type || 'FullDay';
+
+        if (adjDuplicates.length > 0) {
+            for (const dup of adjDuplicates) {
                 if (dup.regularization_shift_type === 'FullDay' || requestedShift === 'FullDay' || dup.regularization_shift_type === requestedShift) {
-                    throw new Error(`A ${dup.status.toLowerCase()} ${type} request already exists for this date (${dup.regularization_shift_type}).`);
+                    throw new Error(`A ${dup.status.toLowerCase()} ${dup.request_type} request already exists for this date (${dup.regularization_shift_type}).`);
                 }
             }
         }
@@ -179,69 +179,41 @@ class AttendanceModel {
             }
         }
 
-        // 3. Validation for Regularization
-        if (type === 'Regularization') {
-            if (new Date(targetDate) > new Date()) {
-                throw new Error('Regularization cannot be requested for future dates.');
-            }
+        // 3. Approved State Validation (Check attendance_daily)
+        const [attendanceRows] = await pool.query(
+            `SELECT status, first_in_time, last_out_time, is_late, is_early_leaving, 
+                    leave_shift_type, regularization_shift_type, onduty_shift_type 
+             FROM attendance_daily 
+             WHERE employee_id = ? AND date = ?`,
+            [employee_id, targetDate]
+        );
 
-            // --- Limit Check ---
-            const targetMonth = new Date(targetDate).getMonth() + 1;
-            const targetYear = new Date(targetDate).getFullYear();
-
-            // Count existing Approved and Pending regularizations this month
-            const [countRows] = await pool.query(
-                `SELECT COUNT(*) as current_count 
-                 FROM attendance_regularization 
-                 WHERE employee_id = ? 
-                 AND MONTH(date) = ? 
-                 AND YEAR(date) = ? 
-                 AND request_type = 'Regularization'
-                 AND status IN ('Approved', 'Pending')`,
-                [employee_id, targetMonth, targetYear]
-            );
-
-            const currentCount = countRows[0].current_count;
-
-            // Fetch limit from settings
-            let limit = 3;
-            try {
-                const limitSetting = await SettingsModel.getSettingByKey('regularization_limit');
-                if (limitSetting && limitSetting.settings_value) {
-                    limit = parseInt(limitSetting.settings_value);
+        if (attendanceRows.length > 0) {
+            const row = attendanceRows[0];
+            
+            // Validation for Regularization
+            if (type === 'Regularization') {
+                if (new Date(targetDate) > new Date()) {
+                    throw new Error('Regularization cannot be requested for future dates.');
                 }
-            } catch (err) {
-                console.error('Error fetching regularization limit setting:', err);
-            }
 
-            if (currentCount >= limit) {
-                throw new Error(`Limit Exceeded: You have already reached your monthly limit of ${limit} regularization requests (including pending ones).`);
-            }
-            // --------------------
+                // Check if already completely regularized/covered
+                if (row.regularization_shift_type === 'FullDay' || 
+                    (requestedShift !== 'FullDay' && row.regularization_shift_type === requestedShift)) {
+                    throw new Error('This shift is already regularized.');
+                }
 
-            const [attendanceRows] = await pool.query(
-                `SELECT is_late, is_early_leaving, status, first_in_time, last_out_time 
-                 FROM attendance_daily 
-                 WHERE employee_id = ? AND date = ?`,
-                [employee_id, targetDate]
-            );
-
-            if (attendanceRows.length > 0) {
-                const day = attendanceRows[0];
-                const isComplete = day.status === 'Present' && day.first_in_time && day.last_out_time && day.is_late === 0 && day.is_early_leaving === 0;
-                if (isComplete) {
+                if (row.status === 'Present' && row.first_in_time && row.last_out_time && row.is_late === 0 && row.is_early_leaving === 0) {
                     throw new Error('Attendance is already marked as complete and on-time for this date.');
                 }
             }
-        } else if (type === 'OnDuty') {
-            // Presence validation for single day On-Duty
-            const [presence] = await pool.query(
-                `SELECT 1 FROM attendance_daily WHERE employee_id = ? AND date = ? AND status = 'Present' LIMIT 1`,
-                [employee_id, targetDate]
-            );
 
-            if (presence.length > 0) {
-                throw new Error(`You are already marked as Present on ${targetDate}. You cannot request On-Duty for this date.`);
+            // Cross-column overlap check (Approved states)
+            const activeShifts = [row.leave_shift_type, row.regularization_shift_type, row.onduty_shift_type].filter(s => s !== null);
+            for (const s of activeShifts) {
+                if (s === 'FullDay' || requestedShift === 'FullDay' || s === requestedShift) {
+                    throw new Error(`Overlap Error: This shift is already covered by an approved ${s === row.leave_shift_type ? 'Leave' : (s === row.onduty_shift_type ? 'On-Duty' : 'Regularization')}.`);
+                }
             }
         }
 
@@ -271,21 +243,31 @@ class AttendanceModel {
             const v_month = new Date(adj.date).getMonth() + 1;
             const v_year = new Date(adj.date).getFullYear();
 
-            // 2. Check for overlapping approved leaves
-            const [leaveCheck] = await conn.execute(
-                `SELECT is_leave, leave_shift_type FROM attendance_daily 
-                 WHERE employee_id = ? AND date = ? AND is_leave = 1`,
+            // 2. Check for overlapping approved states in attendance_daily
+            const [overlapCheck] = await conn.execute(
+                `SELECT leave_shift_type, regularization_shift_type, onduty_shift_type FROM attendance_daily 
+                 WHERE employee_id = ? AND date = ?`,
                 [adj.employee_id, adj.date]
             );
 
-            if (leaveCheck.length > 0) {
-                const leave = leaveCheck[0];
-                if (leave.leave_shift_type === 'FullDay' || adj.regularization_shift_type === 'FullDay' || leave.leave_shift_type === adj.regularization_shift_type) {
-                    throw new Error(`Approval Error: This day/half is already marked as Leave (${leave.leave_shift_type}).`);
+            const requestedShift = adj.regularization_shift_type || 'FullDay';
+
+            if (overlapCheck.length > 0) {
+                const row = overlapCheck[0];
+                const activeShifts = [
+                    { type: 'Leave', shift: row.leave_shift_type },
+                    { type: 'Regularization', shift: row.regularization_shift_type },
+                    { type: 'On-Duty', shift: row.onduty_shift_type }
+                ].filter(s => s.shift !== null);
+
+                for (const s of activeShifts) {
+                    if (s.shift === 'FullDay' || requestedShift === 'FullDay' || s.shift === requestedShift) {
+                        throw new Error(`Approval Error: This shift is already covered by an approved ${s.type} (${s.shift}).`);
+                    }
                 }
             }
 
-            // 3. Update status to Approved
+            // 3. Update request status
             await conn.execute(
                 `UPDATE attendance_regularization 
                  SET status = 'Approved', approved_by = ?, approved_on = NOW(), 
@@ -294,99 +276,67 @@ class AttendanceModel {
                 [approverId, remarks || '', adjustmentId]
             );
 
-            // 3. Apply changes to attendance table based on type
+            // 4. Fetch current attendance state for smart merge
+            const [attendanceRows] = await conn.execute(
+                `SELECT status, shift_type, leave_shift_type, regularization_shift_type, onduty_shift_type 
+                 FROM attendance_daily WHERE employee_id = ? AND date = ?`,
+                [adj.employee_id, adj.date]
+            );
+            const row = attendanceRows[0] || {};
+
+            // 5. Apply changes to attendance table
             if (adj.request_type === 'Regularization') {
-                // Count previous approved regularizations this month
+                // Limit check logic
                 const [countRows] = await conn.execute(
-                    `SELECT COUNT(*) as approved_count 
-                     FROM attendance_regularization 
+                    `SELECT COUNT(*) as approved_count FROM attendance_regularization 
                      WHERE employee_id = ? AND MONTH(date) = ? AND YEAR(date) = ? 
-                     AND status = 'Approved' AND request_type = 'Regularization'
-                     AND id != ?`,
+                     AND status = 'Approved' AND request_type = 'Regularization' AND id != ?`,
                     [adj.employee_id, v_month, v_year, adjustmentId]
                 );
-
                 const approvedCount = countRows[0].approved_count;
 
-                // Fetch dynamic regularization limit from settings
                 let limit = 3;
                 try {
                     const limitSetting = await SettingsModel.getSettingByKey('regularization_limit');
-                    if (limitSetting && limitSetting.settings_value) {
-                        limit = parseInt(limitSetting.settings_value);
-                    }
+                    if (limitSetting?.settings_value) limit = parseInt(limitSetting.settings_value);
                 } catch (err) {
-                    console.error('Error fetching regularization limit setting:', err);
+                    console.error('Limit fetch failed:', err);
                 }
 
-                // Fetch existing status (Leaves AND Physical Punches AND Previous Regularizations)
-                const [existingStatus] = await conn.execute(
-                    `SELECT is_leave, leave_shift_type, shift_type, is_regularized, regularization_shift_type FROM attendance_daily 
-                     WHERE employee_id = ? AND date = ?`,
-                    [adj.employee_id, adj.date]
-                );
+                let finalRegShift = requestedShift;
+                // If already partially regularized, maybe promote to FullDay
+                if (row.regularization_shift_type && row.regularization_shift_type !== 'FullDay' && row.regularization_shift_type !== requestedShift) {
+                    finalRegShift = 'FullDay';
+                }
 
-                // Logic: Proportional Deduction
-                // Start by assuming the other half is absent (0.50 deduction)
-                let deduction = (adj.regularization_shift_type === 'FullDay') ? 0.00 : 0.50;
+                // Deduction calculation
+                let deduction = (finalRegShift === 'FullDay') ? 0.00 : 0.50;
                 
-                let finalRegShift = adj.regularization_shift_type;
-                if (existingStatus.length > 0) {
-                    const row = existingStatus[0];
-                    const regHalf = adj.regularization_shift_type;
-                    
-                    // Merge logic: If already partially regularized and this covers the other half -> FullDay
-                    if (row.is_regularized === 1 && row.regularization_shift_type && row.regularization_shift_type !== 'FullDay') {
-                        if (row.regularization_shift_type !== regHalf) {
-                            finalRegShift = 'FullDay';
-                        }
-                    }
+                const isFirstHalfCovered = (row.shift_type === 'FirstHalf' || row.shift_type === 'FullDay' || 
+                    row.leave_shift_type === 'FirstHalf' || row.leave_shift_type === 'FullDay' ||
+                    row.regularization_shift_type === 'FirstHalf' || row.onduty_shift_type === 'FirstHalf' || row.onduty_shift_type === 'FullDay');
+                const isSecondHalfCovered = (row.shift_type === 'SecondHalf' || row.shift_type === 'FullDay' || 
+                    row.leave_shift_type === 'SecondHalf' || row.leave_shift_type === 'FullDay' ||
+                    row.regularization_shift_type === 'SecondHalf' || row.onduty_shift_type === 'SecondHalf' || row.onduty_shift_type === 'FullDay');
 
-                    // Check if other half is covered by physical work (shift_type), leave, or PREVIOUS regularization
-                    const isFirstHalfCovered = (
-                        row.shift_type === 'FirstHalf' || 
-                        row.shift_type === 'FullDay' || 
-                        (row.is_leave === 1 && row.leave_shift_type === 'FirstHalf') ||
-                        (row.is_regularized === 1 && row.regularization_shift_type === 'FirstHalf')
-                    );
-                    
-                    const isSecondHalfCovered = (
-                        row.shift_type === 'SecondHalf' || 
-                        row.shift_type === 'FullDay' || 
-                        (row.is_leave === 1 && row.leave_shift_type === 'SecondHalf') ||
-                        (row.is_regularized === 1 && row.regularization_shift_type === 'SecondHalf')
-                    );
-
-                    if ((regHalf === 'FirstHalf' && isSecondHalfCovered) || 
-                        (regHalf === 'SecondHalf' && isFirstHalfCovered) ||
-                        (finalRegShift === 'FullDay')) {
-                        deduction = 0.00;
-                    }
+                if ((requestedShift === 'FirstHalf' && isSecondHalfCovered) || 
+                    (requestedShift === 'SecondHalf' && isFirstHalfCovered) || (finalRegShift === 'FullDay')) {
+                    deduction = 0.00;
                 }
-
-                // If they exceed the limit, add penalty
-                if (approvedCount >= limit) {
-                    deduction += 0.50;
-                }
-                
+                if (approvedCount >= limit) deduction += 0.50;
                 if (deduction > 1.0) deduction = 1.0;
 
                 await conn.execute(
-                    `UPDATE attendance_daily 
-                     SET is_regularized = 1, deduction_days = ?, status = 'Present', is_regularize_type = 'Regularization',
-                         regularization_shift_type = ?
+                    `UPDATE attendance_daily SET status = 'Present', regularization_shift_type = ?, deduction_days = ?
                      WHERE employee_id = ? AND date = ?`,
-                    [deduction, finalRegShift, adj.employee_id, adj.date]
+                    [finalRegShift, deduction, adj.employee_id, adj.date]
                 );
             } else if (adj.request_type === 'OnDuty') {
-                // Update attendance_daily for On-Duty
                 await conn.execute(
-                    `UPDATE attendance_daily 
-                     SET status = 'Present', first_in_time = '09:00:00', last_out_time = '17:00:00', 
-                         is_regularized = 1, deduction_days = 0.00, is_regularize_type = 'OnDuty',
-                         regularization_shift_type = ?
+                    `UPDATE attendance_daily SET status = 'Present', onduty_shift_type = ?, deduction_days = 0.00,
+                            first_in_time = '09:00:00', last_out_time = '17:00:00'
                      WHERE employee_id = ? AND date = ?`,
-                    [adj.regularization_shift_type, adj.employee_id, adj.date]
+                    [requestedShift, adj.employee_id, adj.date]
                 );
             }
 
