@@ -59,21 +59,36 @@ const getMyAttendanceSummary = async (req, res, next) => {
 
         const month = req.query.month || new Date().getMonth() + 1;
         const year = req.query.year || new Date().getFullYear();
-        let summary = await AttendanceModel.getAttendanceSummary(targetEmpId, month, year);
         
-        // Ensure summary is an object even if no records found
-        if (!summary) {
-            summary = {
-                present_count: 0,
-                absent_count: 0,
-                late_count: 0,
-                early_leaving_count: 0,
-                regularized_count: 0,
-                onduty_count: 0,
-                leave_days: 0,
-                total_deductions: 0
-            };
-        }
+        // Detailed Summary Query
+        const [statsRows] = await pool.execute(
+            `SELECT 
+                COUNT(*) as total_days,
+                SUM(CASE WHEN status IN ('WeekEnd', 'Public Holiday', 'Exceptional Holiday') THEN 1 ELSE 0 END) as holiday_count,
+                SUM(CASE WHEN status NOT IN ('WeekEnd', 'Public Holiday', 'Exceptional Holiday') THEN 1 ELSE 0 END) as working_days,
+                SUM(deduction_days) as total_deductions,
+                SUM(CASE WHEN is_late = 1 AND deduction_days > 0 THEN 1 ELSE 0 END) as late_count,
+                SUM(CASE WHEN is_early_leaving = 1 AND deduction_days > 0 THEN 1 ELSE 0 END) as early_count,
+                SUM(CASE WHEN status = 'Absent' AND deduction_days >= 1 THEN 1 ELSE 0 END) as absent_count,
+                SUM(CASE WHEN regularization_shift_type IS NOT NULL THEN 1 ELSE 0 END) as regularized_count
+             FROM attendance_daily 
+             WHERE employee_id = ? AND MONTH(date) = ? AND YEAR(date) = ?`,
+            [targetEmpId, month, year]
+        );
+
+        const stats = statsRows[0];
+        const summary = {
+            total_working_days: stats.working_days || 0,
+            holiday_count: stats.holiday_count || 0,
+            total_deductions: parseFloat(stats.total_deductions || 0),
+            present_count: (stats.working_days || 0) - parseFloat(stats.total_deductions || 0),
+            late_count: stats.late_count || 0,
+            early_count: stats.early_count || 0,
+            absent_count: stats.absent_count || 0,
+            regularized_count: stats.regularized_count || 0,
+            leave_balance: 0,
+            month_leaves_taken: 0
+        };
 
         // Fetch Leave Balance
         try {
@@ -81,7 +96,6 @@ const getMyAttendanceSummary = async (req, res, next) => {
             summary.leave_balance = balances.reduce((sum, b) => sum + b.available, 0);
         } catch (err) {
             console.error('Failed to fetch leave balance for summary:', err);
-            summary.leave_balance = 0;
         }
 
         // Fetch Month Leaves Taken (Approved & Pending)
@@ -96,7 +110,6 @@ const getMyAttendanceSummary = async (req, res, next) => {
             summary.month_leaves_taken = takenRows[0].taken;
         } catch (err) {
             console.error('Failed to fetch month leaves taken for summary:', err);
-            summary.month_leaves_taken = 0;
         }
 
         sendResponse(res, 200, 'Attendance summary fetched', summary);
