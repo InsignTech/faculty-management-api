@@ -310,9 +310,25 @@ class LeavePolicyModel {
    */
   static async calculateAccrual(dryRun = false, targetDate = null) {
     const [employees] = await pool.execute('SELECT employee_id, employee_name FROM employee WHERE active = 1');
-    const now = targetDate ? new Date(targetDate) : new Date();
-    const currentMonth = now.getMonth() + 1; // 1-12
-    const currentYear = now.getFullYear();
+    
+    let currentMonth, currentYear;
+    if (targetDate) {
+        // Safe parsing: Split YYYY-MM-DD to avoid timezone shifts
+        const parts = targetDate.split('-');
+        if (parts.length === 3) {
+            currentYear = parseInt(parts[0]);
+            currentMonth = parseInt(parts[1]);
+        } else {
+            const now = new Date(targetDate);
+            currentMonth = now.getMonth() + 1;
+            currentYear = now.getFullYear();
+        }
+    } else {
+        const now = new Date();
+        currentMonth = now.getMonth() + 1;
+        currentYear = now.getFullYear();
+    }
+    
     const monthYear = `${String(currentMonth).padStart(2, '0')}-${currentYear}`;
     
     // Fetch Year Start Month from settings (Default 1 - January)
@@ -324,14 +340,11 @@ class LeavePolicyModel {
         // Fallback to 1
     }
 
-    const prevDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    const prevMonthYear = `${String(prevDate.getMonth() + 1).padStart(2, '0')}-${prevDate.getFullYear()}`;
-
     const report = [];
 
     for (const emp of employees) {
       const empId = emp.employee_id;
-      const sqlTargetDate = now.toISOString().split('T')[0];
+      const sqlTargetDate = `${currentYear}-${String(currentMonth).padStart(2, '0')}-01`;
       const effectivePolicy = await this.getEffectivePolicy(empId, sqlTargetDate);
       if (!effectivePolicy) continue;
 
@@ -378,83 +391,34 @@ class LeavePolicyModel {
             }
         }
 
-        // 2. BALANCE CASCADING (Crucial for Backdated Leaves)
-        const [prevRecord] = await pool.execute(
-          'SELECT balance_leave FROM employee_leaves WHERE emp_id = ? AND leave_type = ? AND month_year = ?',
-          [empId, leaveType, prevMonthYear]
-        );
-        
-        let previousBalance = prevRecord.length > 0 ? parseFloat(prevRecord[0].balance_leave) : 0;
-        let openingLeave = 0;
-
-        if (currentMonth === startMonth) {
-            const action = item.yearEndAction || 'Lap';
-            if (action === 'Carry Forward') {
-                openingLeave = previousBalance;
-                const limit = parseFloat(item.maxCarryForward || 0);
-                if (limit > 0 && openingLeave > limit) openingLeave = limit;
-            } else {
-                openingLeave = 0;
-            }
-        } else {
-            // CASCADE: Always pull the fresh balance from last month
-            openingLeave = previousBalance;
-            // If the policy says no carry forward (monthly lapse), we force 0
-            if (!(item.carryForward === true || item.carryForward === 1 || item.carryForward === 'true')) {
-                openingLeave = 0;
-            }
-        }
-
-        // 3. CAP CHECK
-        const maxCap = parseFloat(item.maxAccumulation || 0);
-        if (maxCap > 0 && (openingLeave + creditAmount) > maxCap) {
-            creditAmount = Math.max(0, maxCap - openingLeave);
-        }
-
-        // 4. PERSISTENCE & SOURCE-OF-TRUTH SYNC (Calculate leaves actually taken in this month)
-        const [requests] = await pool.execute(`
-            SELECT SUM(total_days) as taken 
-            FROM leave_requests 
-            WHERE employee_id = ? 
-            AND leave_type = ? 
-            AND status = 'Approved' 
-            AND DATE_FORMAT(start_date, '%m-%Y') = ?
-        `, [empId, leaveType, monthYear]);
-        
-        const leavesTaken = parseFloat(requests[0].taken || 0);
-
-        const [existing] = await pool.execute(
-            'SELECT id FROM employee_leaves WHERE emp_id = ? AND leave_type = ? AND month_year = ?',
-            [empId, leaveType, monthYear]
+        // 2. RUN SYNC VIA STORED PROCEDURE
+        // This handles: Finding last balance, Calculating leaves taken, and Persisting
+        const [spResult] = await pool.execute(
+            'CALL sp_sync_leave_accrual(?, ?, ?, ?, ?, ?, ?, ?)',
+            [
+                empId, 
+                leaveType, 
+                monthYear, 
+                currentYear, 
+                currentMonth, 
+                creditAmount, 
+                dryRun, 
+                startMonth
+            ]
         );
 
-        if (creditAmount !== 0 || openingLeave !== 0 || existing.length > 0) {
-          const total = openingLeave + creditAmount;
-          const balance = total - leavesTaken;
+        const stats = spResult[0][0];
 
-          empReport.credits.push({
-            leaveType,
-            openingLeave,
-            creditAmount,
-            leavesTaken,
-            total,
-            balance
-          });
-
-          if (!dryRun) {
-            await pool.execute(`
-              INSERT INTO employee_leaves 
-                (emp_id, leave_type, month_year, opening_leave, credited_count, leaves_taken)
-              VALUES (?, ?, ?, ?, ?, ?)
-              ON DUPLICATE KEY UPDATE 
-                credited_count = VALUES(credited_count),
-                opening_leave = VALUES(opening_leave),
-                leaves_taken = VALUES(leaves_taken)
-            `, [empId, leaveType, monthYear, openingLeave, creditAmount, leavesTaken]);
-          }
-        }
+        empReport.credits.push({
+          leaveType,
+          openingLeave: parseFloat(stats.openingLeave),
+          creditAmount: parseFloat(stats.creditAmount),
+          leavesTaken: parseFloat(stats.leavesTaken),
+          total: parseFloat(stats.total),
+          balance: parseFloat(stats.balance)
+        });
       }
-      if (empReport.credits.length > 0) report.push(empReport);
+      report.push(empReport);
     }
     return dryRun ? report : true;
   }
