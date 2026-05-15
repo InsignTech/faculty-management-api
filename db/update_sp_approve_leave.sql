@@ -65,7 +65,6 @@ proc: BEGIN
     -- ── Phase 1: Validation Loop (Check for conflicts BEFORE updating balance) ──
     SET v_current_date = v_start_date;
     validation_loop: WHILE v_current_date <= v_end_date DO
-        SET @is_reg = 0;
         SET @reg_shift = NULL;
         SET @is_leave = 0;
         SET @leave_shift = NULL;
@@ -131,210 +130,97 @@ proc: BEGIN
     -- ── Phase 3: Update attendance_daily ─────────────────────────────────────
     SET v_current_date = v_start_date;
     date_loop: WHILE v_current_date <= v_end_date DO
-        -- Read existing data for merge logic
-        SET @is_reg = 0;
-        SET @reg_shift = NULL;
-        SET @cur_shift = NULL;
-
-        SELECT regularization_shift_type, onduty_shift_type, shift_type
-        INTO @reg_shift, @onduty_shift, @cur_shift
-        FROM   attendance_daily
-        WHERE  employee_id = v_emp_id AND date = v_current_date
-        LIMIT  1;
-
         -- ── Skip weekends and holidays ────────────────────────────────────────
-        SET @holiday_type    = NULL;
         SET @existing_status = NULL;
-
-        SELECT status INTO @existing_status
-        FROM   attendance_daily
-        WHERE  employee_id = v_emp_id
-          AND  date        = v_current_date
-        LIMIT  1;
+        SELECT status INTO @existing_status FROM attendance_daily
+        WHERE employee_id = v_emp_id AND date = v_current_date LIMIT 1;
 
         IF @existing_status IN ('WeekEnd','Public Holiday','Exceptional Holiday') THEN
             SET v_current_date = DATE_ADD(v_current_date, INTERVAL 1 DAY);
             ITERATE date_loop;
         END IF;
 
-        SELECT holiday_type INTO @holiday_type
-        FROM   holiday_master
-        WHERE  v_current_date BETWEEN holiday_start_date AND holiday_end_date
-          AND  is_active   = 1
-          AND  employee_id IN (v_emp_id, -1)
-        ORDER BY CASE WHEN employee_id = -1 THEN 1 ELSE 2 END
-        LIMIT 1;
-
-        IF @holiday_type IS NOT NULL THEN
+        IF EXISTS (
+            SELECT 1 FROM holiday_master
+            WHERE v_current_date BETWEEN holiday_start_date AND holiday_end_date
+              AND is_active = 1 AND employee_id IN (v_emp_id, -1)
+        ) THEN
             SET v_current_date = DATE_ADD(v_current_date, INTERVAL 1 DAY);
             ITERATE date_loop;
         END IF;
 
-        -- ── Read existing punch data ──────────────────────────────────────────
-        SET @first_in    = NULL;
-        SET @last_out    = NULL;
-        SET @worked_mins = 0;
-        SET @cur_shift   = NULL;
-        SET @cur_deduct  = 0;
+        -- Read ALL existing coverage data
+        SET @first_in = NULL; SET @last_out = NULL; SET @worked_mins = 0;
+        SET @cur_shift = NULL; SET @cur_status = NULL;
+        SET @reg_shift = NULL; SET @od_shift = NULL;
+        SET @is_leave_existing = 0; SET @leave_shift_existing = NULL;
 
-        SELECT
-            first_in_time,
-            last_out_time,
-            worked_mins,
-            shift_type,
-            deduction_days
-        INTO
-            @first_in,
-            @last_out,
-            @worked_mins,
-            @cur_shift,
-            @cur_deduct
+        SELECT 
+            first_in_time, last_out_time, worked_mins, 
+            shift_type, status,
+            regularization_shift_type, onduty_shift_type,
+            is_leave, leave_shift_type
+        INTO 
+            @first_in, @last_out, @worked_mins,
+            @cur_shift, @cur_status,
+            @reg_shift, @od_shift,
+            @is_leave_existing, @leave_shift_existing
         FROM attendance_daily
-        WHERE employee_id = v_emp_id
-          AND date        = v_current_date
+        WHERE employee_id = v_emp_id AND date = v_current_date
         LIMIT 1;
 
-        -- ─────────────────────────────────────────────────────────────────────
-        -- ── Full day leave ────────────────────────────────────────────────────
-        -- ─────────────────────────────────────────────────────────────────────
-        IF v_leave_half = 'FullDay' THEN
+        -- ── Calculate Merged Coverage ────────────────────────────────────────
+        -- Coverage Check: Is the first/second half covered by ANY valid state?
+        -- New state will be merged with existing state.
+        
+        SET @v_first_half_covered = (
+            (@cur_shift IN ('FirstHalf', 'FullDay')) OR
+            (@reg_shift IN ('FirstHalf', 'FullDay')) OR
+            (@od_shift IN ('FirstHalf', 'FullDay')) OR
+            (@is_leave_existing = 1 AND @leave_shift_existing IN ('FirstHalf', 'FullDay')) OR
+            (v_leave_half IN ('FirstHalf', 'FullDay'))
+        );
 
-            -- If employee actually punched in, reflect real shift
-            SET @final_shift  = IF(@cur_shift IS NOT NULL AND @cur_shift != 'Absent',
-                                   @cur_shift, 'Absent');
-            SET @final_status = IF(@cur_shift IS NOT NULL AND @cur_shift != 'Absent',
-                                   'Present', 'Leave');
+        SET @v_second_half_covered = (
+            (@cur_shift IN ('SecondHalf', 'FullDay')) OR
+            (@reg_shift IN ('SecondHalf', 'FullDay')) OR
+            (@od_shift IN ('SecondHalf', 'FullDay')) OR
+            (@is_leave_existing = 1 AND @leave_shift_existing IN ('SecondHalf', 'FullDay')) OR
+            (v_leave_half IN ('SecondHalf', 'FullDay'))
+        );
 
-            INSERT INTO attendance_daily (
-                employee_id, date,
-                first_in_time, last_out_time, worked_mins,
-                shift_type, status,
-                is_late, late_minutes,
-                is_early_leaving, early_minutes,
-                overtime_minutes, deduction_days,
-                is_worked_on_holiday,
-                regularization_shift_type,
-                is_leave, is_leave_type, leave_shift_type
-            )
-            VALUES (
-                v_emp_id, v_current_date,
-                @first_in, @last_out, @worked_mins,
-                @final_shift, @final_status,
-                0, 0, 0, 0, 0, 0,
-                0, NULL,
-                1, v_leave_type, v_leave_half
-            )
-            ON DUPLICATE KEY UPDATE
-                shift_type         = @final_shift,
-                status             = @final_status,
-                is_late            = 0,
-                late_minutes       = 0,
-                is_early_leaving   = 0,
-                early_minutes      = 0,
-                overtime_minutes   = 0,
-                deduction_days     = 0,
-                regularization_shift_type = NULL,
-                is_leave           = 1,
-                is_leave_type      = v_leave_type,
-                leave_shift_type   = v_leave_half;
+        SET @final_deduct = IF(@v_first_half_covered AND @v_second_half_covered, 0.00, 0.50);
+        IF NOT @v_first_half_covered AND NOT @v_second_half_covered THEN SET @final_deduct = 1.00; END IF;
 
-        -- ─────────────────────────────────────────────────────────────────────
-        -- ── First half leave ──────────────────────────────────────────────────
-        -- ─────────────────────────────────────────────────────────────────────
-        ELSEIF v_leave_half = 'FirstHalf' THEN
-
-            -- Logic: If second half is covered by Physical Punch OR Regularization OR On-Duty OR existing Leave
-            SET @is_second_covered = IF(
-                @cur_shift IN ('SecondHalf','FullDay') OR 
-                @reg_shift IN ('SecondHalf','FullDay') OR 
-                @onduty_shift IN ('SecondHalf','FullDay') OR
-                (@is_leave = 1 AND @leave_shift IN ('SecondHalf','FullDay')), 
-                1, 0
-            );
-            
-            SET @final_shift  = IF(@is_second_covered = 1, 'FullDay', 'FirstHalf');
-            SET @final_status = IF(@is_second_covered = 1, 'Present', 'Leave');
-            SET @final_deduct = IF(@is_second_covered = 1, 0.00, 0.50);
-
-            INSERT INTO attendance_daily (
-                employee_id, date,
-                first_in_time, last_out_time, worked_mins,
-                shift_type, status,
-                is_late, late_minutes,
-                is_early_leaving, early_minutes,
-                overtime_minutes, deduction_days,
-                is_worked_on_holiday,
-                regularization_shift_type, onduty_shift_type,
-                is_leave, is_leave_type, leave_shift_type
-            )
-            VALUES (
-                v_emp_id, v_current_date,
-                @first_in, @last_out, @worked_mins,
-                @final_shift, @final_status,
-                0, 0, 0, 0, 0,
-                @final_deduct,
-                0, @reg_shift, @onduty_shift,
-                1, v_leave_type, v_leave_half
-            )
-            ON DUPLICATE KEY UPDATE
-                shift_type         = @final_shift,
-                status             = @final_status,
-                deduction_days     = @final_deduct,
-                is_leave           = 1,
-                is_leave_type      = v_leave_type,
-                leave_shift_type   = v_leave_half;
-
-        -- ─────────────────────────────────────────────────────────────────────
-        -- ── Second half leave ─────────────────────────────────────────────────
-        -- ─────────────────────────────────────────────────────────────────────
-        ELSEIF v_leave_half = 'SecondHalf' THEN
-
-            -- Logic: If first half is covered by Physical Punch OR Regularization OR On-Duty OR existing Leave
-            SET @is_first_covered = IF(
-                @cur_shift IN ('FirstHalf','FullDay') OR 
-                @reg_shift IN ('FirstHalf','FullDay') OR 
-                @onduty_shift IN ('FirstHalf','FullDay') OR
-                (@is_leave = 1 AND @leave_shift IN ('FirstHalf','FullDay')), 
-                1, 0
-            );
-
-            SET @final_shift  = IF(@is_first_covered = 1, 'FullDay', 'SecondHalf');
-            SET @final_status = IF(@is_first_covered = 1, 'Present', 'Leave');
-            SET @final_deduct = IF(@is_first_covered = 1, 0.00, 0.50);
-
-            INSERT INTO attendance_daily (
-                employee_id, date,
-                first_in_time, last_out_time, worked_mins,
-                shift_type, status,
-                is_late, late_minutes,
-                is_early_leaving, early_minutes,
-                overtime_minutes, deduction_days,
-                is_worked_on_holiday,
-                regularization_shift_type, onduty_shift_type,
-                is_leave, is_leave_type, leave_shift_type
-            )
-            VALUES (
-                v_emp_id, v_current_date,
-                @first_in, @last_out, @worked_mins,
-                @final_shift, @final_status,
-                0, 0, 0, 0, 0,
-                @final_deduct,
-                0, @reg_shift, @onduty_shift,
-                1, v_leave_type, v_leave_half
-            )
-            ON DUPLICATE KEY UPDATE
-                shift_type         = @final_shift,
-                status             = @final_status,
-                deduction_days     = @final_deduct,
-                is_leave           = 1,
-                is_leave_type      = v_leave_type,
-                leave_shift_type   = v_leave_half;
+        SET @final_shift = 'Absent';
+        IF @v_first_half_covered AND @v_second_half_covered THEN SET @final_shift = 'FullDay';
+        ELSEIF @v_first_half_covered THEN SET @final_shift = 'FirstHalf';
+        ELSEIF @v_second_half_covered THEN SET @final_shift = 'SecondHalf';
         END IF;
 
-        END IF;
+        SET @final_status = IF(@final_shift = 'FullDay' OR @cur_shift = 'FullDay', 'Present', 'Leave');
+
+        -- Final Update
+        INSERT INTO attendance_daily (
+            employee_id, date, first_in_time, last_out_time, worked_mins,
+            shift_type, status, is_late, late_minutes, is_early_leaving, early_minutes,
+            overtime_minutes, deduction_days, is_worked_on_holiday,
+            is_leave, is_leave_type, leave_shift_type
+        ) VALUES (
+            v_emp_id, v_current_date, @first_in, @last_out, @worked_mins,
+            @final_shift, @final_status, 0, 0, 0, 0, 0,
+            @final_deduct, 0, 1, v_leave_type, v_leave_half
+        )
+        ON DUPLICATE KEY UPDATE
+            shift_type = @final_shift,
+            status = @final_status,
+            deduction_days = @final_deduct,
+            is_leave = 1,
+            is_leave_type = v_leave_type,
+            leave_shift_type = IF(v_leave_half = 'FullDay', 'FullDay', 
+                                  IF(@is_leave_existing = 1 AND @leave_shift_existing != v_leave_half, 'FullDay', v_leave_half));
 
         SET v_current_date = DATE_ADD(v_current_date, INTERVAL 1 DAY);
-
     END WHILE date_loop;
 
     -- ─── Return summary ───────────────────────────────────────────────────────

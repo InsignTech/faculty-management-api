@@ -120,9 +120,12 @@ class ReportModel {
                     const isOD = dayAttendance.onduty_shift_type !== null;
                     const isLeave = Number(dayAttendance.is_leave) === 1 || dayAttendance.status === 'Leave' || dayAttendance.leave_shift_type !== null;
 
-                    if ((isReg || isOD) && isLeave) {
+                    if (isOD && isLeave) {
+                        status = 'On-Duty + Leave';
+                        remark = `${dayAttendance.is_leave_type || 'Leave'} (OD)`;
+                    } else if (isReg && isLeave) {
                         status = 'Regularized + Leave';
-                        remark = `${dayAttendance.is_leave_type || 'Leave'}${isOD ? ' (OD)' : (isReg ? ' (Reg)' : '')}`;
+                        remark = `${dayAttendance.is_leave_type || 'Leave'} (Reg)`;
                     }
                     // If it's a processed non-working day, respect that status
                     else if (['WeekEnd', 'Public Holiday', 'Exceptional Holiday', 'Vacation', 'Leave'].includes(dayAttendance.status)) {
@@ -131,7 +134,7 @@ class ReportModel {
                     } 
                     // Priority: On Duty
                     else if (isOD) {
-                        status = 'Regularized';
+                        status = 'On-Duty';
                         remark = 'On Duty';
                     }
                     // Priority: Regularized

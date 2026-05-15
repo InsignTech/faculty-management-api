@@ -293,11 +293,12 @@ class AttendanceModel {
 
             // 4. Fetch current attendance state for smart merge
             const [attendanceRows] = await conn.execute(
-                `SELECT status, shift_type, leave_shift_type, regularization_shift_type, onduty_shift_type 
+                `SELECT status, shift_type, leave_shift_type, regularization_shift_type, onduty_shift_type, 
+                        first_in_time, last_out_time 
                  FROM attendance_daily WHERE employee_id = ? AND date = ?`,
                 [adj.employee_id, adj.date]
             );
-            const row = attendanceRows[0] || {};
+            const row = attendanceRows[0] || { first_in_time: null, last_out_time: null };
 
             // 5. Apply changes to attendance table
             if (adj.request_type === 'Regularization') {
@@ -347,11 +348,43 @@ class AttendanceModel {
                     [finalRegShift, deduction, adj.employee_id, adj.date]
                 );
             } else if (adj.request_type === 'OnDuty') {
+                let finalOnDutyShift = requestedShift;
+                // If already partially covered, maybe promote
+                if (row.onduty_shift_type && row.onduty_shift_type !== 'FullDay' && row.onduty_shift_type !== requestedShift) {
+                    finalOnDutyShift = 'FullDay';
+                }
+
+                // Check coverage
+                const isFirstHalfCovered = (row.shift_type === 'FirstHalf' || row.shift_type === 'FullDay' || 
+                    row.leave_shift_type === 'FirstHalf' || row.leave_shift_type === 'FullDay' ||
+                    row.regularization_shift_type === 'FirstHalf' || row.regularization_shift_type === 'FullDay' ||
+                    finalOnDutyShift === 'FirstHalf' || finalOnDutyShift === 'FullDay');
+                
+                const isSecondHalfCovered = (row.shift_type === 'SecondHalf' || row.shift_type === 'FullDay' || 
+                    row.leave_shift_type === 'SecondHalf' || row.leave_shift_type === 'FullDay' ||
+                    row.regularization_shift_type === 'SecondHalf' || row.regularization_shift_type === 'FullDay' ||
+                    finalOnDutyShift === 'SecondHalf' || finalOnDutyShift === 'FullDay');
+
+                let deduction = (isFirstHalfCovered && isSecondHalfCovered) ? 0.00 : 0.50;
+                if (!isFirstHalfCovered && !isSecondHalfCovered) deduction = 1.00;
+
+                // For OnDuty, we usually set placeholder times if it covers the shift
+                let inTime = row.first_in_time;
+                let outTime = row.last_out_time;
+                if (finalOnDutyShift === 'FullDay') {
+                    inTime = '09:00:00';
+                    outTime = '17:00:00';
+                } else if (finalOnDutyShift === 'FirstHalf' && !inTime) {
+                    inTime = '09:00:00';
+                } else if (finalOnDutyShift === 'SecondHalf' && !outTime) {
+                    outTime = '17:00:00';
+                }
+
                 await conn.execute(
-                    `UPDATE attendance_daily SET status = 'Present', onduty_shift_type = ?, deduction_days = 0.00,
-                            first_in_time = '09:00:00', last_out_time = '17:00:00'
+                    `UPDATE attendance_daily SET status = 'Present', onduty_shift_type = ?, deduction_days = ?,
+                            first_in_time = ?, last_out_time = ?
                      WHERE employee_id = ? AND date = ?`,
-                    [requestedShift, adj.employee_id, adj.date]
+                    [finalOnDutyShift, deduction, inTime || null, outTime || null, adj.employee_id, adj.date]
                 );
             }
 
