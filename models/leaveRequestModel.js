@@ -158,6 +158,7 @@ class LeaveRequestModel {
     const d = new Date(date);
     const monthYear = `${String(d.getMonth() + 1).padStart(2, '0')}-${d.getFullYear()}`;
 
+    // 1. Get the base balance from the employee_leaves table (only updated on approval/accrual)
     const [rows] = await pool.execute(
       `SELECT leave_type, opening_leave, credited_count, leaves_taken, total_leaves, balance_leave
        FROM employee_leaves 
@@ -165,33 +166,59 @@ class LeaveRequestModel {
       [employeeId, monthYear]
     );
 
+    // 2. Get any pending leave requests to reflect them in "Available" and "Used" immediately
+    const [pendingRows] = await pool.execute(
+      `SELECT leave_type, COALESCE(SUM(total_days), 0) as pending_days
+       FROM leave_requests
+       WHERE employee_id = ? AND status = 'Pending'
+       GROUP BY leave_type`,
+      [employeeId]
+    );
+
+    const pendingMap = {};
+    pendingRows.forEach(p => {
+      pendingMap[p.leave_type] = parseFloat(p.pending_days);
+    });
+
     if (rows.length === 0) {
-        // Fallback or initialization if no records exist yet
+        // Fallback or initialization if no records exist yet for this month
         const policy = await LeavePolicyModel.getEffectivePolicy(employeeId, date);
         if (!policy) return [];
-        return policy.policy_value.map(item => ({
-            leaveType: item.leaveType,
-            totalAllocated: parseFloat(item.leaveCount),
-            opening: 0,
-            credited: 0,
-            used: 0,
-            available: 0,
-            strategy: item.creditFrequency || item.cappingType
-        }));
+        return policy.policy_value.map(item => {
+            const pendingVal = pendingMap[item.leaveType] || 0;
+            const totalAlloc = parseFloat(item.leaveCount);
+            return {
+                leaveType: item.leaveType,
+                totalAllocated: totalAlloc,
+                opening: 0,
+                credited: 0,
+                used: pendingVal,
+                available: totalAlloc - pendingVal,
+                pending: pendingVal,
+                strategy: item.creditFrequency || item.cappingType
+            };
+        });
     }
 
-    return rows.map(row => ({
-      leaveType: row.leave_type,
-      opening: parseFloat(row.opening_leave),
-      credited: parseFloat(row.credited_count),
-      used: parseFloat(row.leaves_taken),
-      total: parseFloat(row.total_leaves),
-      available: parseFloat(row.balance_leave),
-      currentlyEarned: parseFloat(row.total_leaves), // total = opening + credited
-      totalAllocated: parseFloat(row.total_leaves), // for now, show total as allocated
-      carryForward: parseFloat(row.opening_leave),
-      strategy: 'Table-Based'
-    }));
+    return rows.map(row => {
+      const pendingVal = pendingMap[row.leave_type] || 0;
+      const baseUsed = parseFloat(row.leaves_taken);
+      const baseAvailable = parseFloat(row.balance_leave);
+
+      return {
+        leaveType: row.leave_type,
+        opening: parseFloat(row.opening_leave),
+        credited: parseFloat(row.credited_count),
+        used: baseUsed + pendingVal, // Include pending in used
+        total: parseFloat(row.total_leaves),
+        available: Math.max(0, baseAvailable - pendingVal), // Subtract pending from available
+        currentlyEarned: parseFloat(row.total_leaves), 
+        totalAllocated: parseFloat(row.total_leaves), 
+        carryForward: parseFloat(row.opening_leave),
+        pending: pendingVal, // Send pending separately for UI highlighting
+        strategy: 'Table-Based'
+      };
+    });
   }
 }
 

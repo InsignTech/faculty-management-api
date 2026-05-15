@@ -84,12 +84,12 @@ const getMyAttendanceSummary = async (req, res, next) => {
             summary.leave_balance = 0;
         }
 
-        // Fetch Month Leaves Taken (Approved only)
+        // Fetch Month Leaves Taken (Approved & Pending)
         try {
             const [takenRows] = await pool.execute(
                 `SELECT COALESCE(SUM(total_days), 0) as taken 
                  FROM leave_requests 
-                 WHERE employee_id = ? AND status = 'Approved' 
+                 WHERE employee_id = ? AND status IN ('Approved', 'Pending')
                  AND MONTH(start_date) = ? AND YEAR(start_date) = ?`,
                 [targetEmpId, month, year]
             );
