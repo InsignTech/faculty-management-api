@@ -11,17 +11,17 @@ CREATE PROCEDURE `sp_get_employee_attendance`(
 )
 BEGIN
     SELECT 
-        attendance_id, employee_id, date, first_in_time, last_out_time, worked_mins,
-        shift_type, status, is_late, late_minutes, is_early_leaving, early_minutes,
-        overtime_minutes, deduction_days, is_worked_on_holiday,
-        is_leave, is_leave_type, leave_shift_type,
-        regularization_shift_type, onduty_shift_type,
-        created_on
-    FROM attendance_daily 
-    WHERE employee_id = p_employee_id 
-      AND MONTH(date) = p_month 
-      AND YEAR(date) = p_year
-    ORDER BY date DESC;
+        ad.*,
+        (SELECT GROUP_CONCAT(CONCAT(lr.leave_type, ' (', lr.leave_half_type, ')') SEPARATOR ', ')
+         FROM leave_requests lr
+         WHERE lr.employee_id = ad.employee_id 
+           AND lr.status = 'Approved' 
+           AND ad.date BETWEEN lr.start_date AND lr.end_date) as leave_details
+    FROM attendance_daily ad
+    WHERE ad.employee_id = p_employee_id 
+      AND MONTH(ad.date) = p_month 
+      AND YEAR(ad.date) = p_year
+    ORDER BY ad.date DESC;
 END //
 
 -- 2. Update Attendance Summary

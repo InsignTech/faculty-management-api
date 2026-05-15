@@ -91,11 +91,12 @@ class ReportModel {
                     return a.employee_id === emp.employee_id && aDate === dateStr;
                 });
 
-                const empLeave = leaves.find(l => {
+                const dayLeaves = leaves.filter(l => {
                     const lStart = new Date(l.start_date);
                     const lEnd = new Date(l.end_date);
                     return l.employee_id === emp.employee_id && curr >= lStart && curr <= lEnd;
                 });
+                const empLeave = dayLeaves.length > 0 ? dayLeaves[0] : null;
                 
                 const empHoliday = holidays.find(h => {
                     const hStart = new Date(h.holiday_start_date);
@@ -122,15 +123,27 @@ class ReportModel {
 
                     if (isOD && isLeave) {
                         status = 'On-Duty + Leave';
-                        remark = `${dayAttendance.is_leave_type || 'Leave'} (OD)`;
+                        const leaveInfo = dayLeaves.length > 0 
+                            ? dayLeaves.map(l => `${l.leave_type} (${l.leave_half_type || 'FullDay'})`).join(', ')
+                            : (dayAttendance.is_leave_type || 'Leave');
+                        remark = `${leaveInfo} (OD)`;
                     } else if (isReg && isLeave) {
                         status = 'Regularized + Leave';
-                        remark = `${dayAttendance.is_leave_type || 'Leave'} (Reg)`;
+                        const leaveInfo = dayLeaves.length > 0 
+                            ? dayLeaves.map(l => `${l.leave_type} (${l.leave_half_type || 'FullDay'})`).join(', ')
+                            : (dayAttendance.is_leave_type || 'Leave');
+                        remark = `${leaveInfo} (Reg)`;
                     }
                     // If it's a processed non-working day, respect that status
                     else if (['WeekEnd', 'Public Holiday', 'Exceptional Holiday', 'Vacation', 'Leave'].includes(dayAttendance.status)) {
                         status = dayAttendance.status === 'WeekEnd' ? 'Weekly Off' : dayAttendance.status;
-                        remark = dayAttendance.status;
+                        if (dayAttendance.status === 'Leave') {
+                            remark = dayLeaves.length > 0 
+                                ? dayLeaves.map(l => `${l.leave_type} (${l.leave_half_type || 'FullDay'})`).join(', ')
+                                : (dayAttendance.is_leave_type || 'Leave');
+                        } else {
+                            remark = dayAttendance.status;
+                        }
                     } 
                     // Priority: On Duty
                     else if (isOD) {
