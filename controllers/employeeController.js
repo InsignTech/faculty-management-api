@@ -8,37 +8,37 @@ const { sendWelcomeEmail } = require('../utils/emailService');
 const createEmployee = async (req, res, next) => {
   try {
     const { email, employee_name, role_id, employee_code } = req.body;
-    
+
     // 1. Mandatory Validation
     if (!email || !employee_code || !employee_name) {
-        return next(new ErrorResponse('Email, Employee Name and Code are mandatory!', 400, 'VALIDATION_ERROR'));
+      return next(new ErrorResponse('Email, Employee Name and Code are mandatory!', 400, 'VALIDATION_ERROR'));
     }
 
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
-        return next(new ErrorResponse('Please provide a valid email address!', 400, 'VALIDATION_ERROR'));
+      return next(new ErrorResponse('Please provide a valid email address!', 400, 'VALIDATION_ERROR'));
     }
 
     // The account creation is now handled inside EmployeeModel.create
     const result = await EmployeeModel.create(req.body);
-    
+
     // Send welcome email if creation was successful
     if (result && result.employee_id && email) {
-        try {
-            // Default password pattern used in Model: [EmployeeCode]@123
-            const tempPassword = `${employee_code || 'User'}@123`;
-            await sendWelcomeEmail({ toEmail: email, employeeName: employee_name, tempPassword });
-            console.log(`Welcome email sent to: ${email}`);
-        } catch (emailErr) {
-            console.error(`Failed to send welcome email to ${email}:`, emailErr.message);
-        }
+      try {
+        // Default password pattern used in Model: [EmployeeCode]@123
+        const tempPassword = `${employee_code || 'User'}@123`;
+        await sendWelcomeEmail({ toEmail: email, employeeName: employee_name, tempPassword });
+        console.log(`Welcome email sent to: ${email}`);
+      } catch (emailErr) {
+        console.error(`Failed to send welcome email to ${email}:`, emailErr.message);
+      }
     }
 
     sendResponse(res, 201, 'Employee created successfully', result);
   } catch (error) {
     // Check for MySQL duplicate key error (ER_DUP_ENTRY)
     if (error.code === 'ER_SIGNAL_NOT_FOUND' || error.sqlState === '45000') {
-        return next(new ErrorResponse(error.message, 409, 'CONFLICT'));
+      return next(new ErrorResponse(error.message, 409, 'CONFLICT'));
     }
     next(error);
   }
@@ -51,14 +51,14 @@ const getEmployees = async (req, res, next) => {
 
     const userRole = req.user.role?.toLowerCase();
     const isAdmin = ['admin', 'super_admin', 'principal'].includes(userRole);
-    
+
     let managerId = 0;
     let myManagerId = 0;
 
     if (!isAdmin) {
       const myId = req.user.employeeId || 0;
       managerId = myId;
-      
+
       const currentUserEmp = await EmployeeModel.getById(myId);
       myManagerId = currentUserEmp?.reporting_manager_id || 0;
     }
@@ -128,10 +128,10 @@ const updateEmployee = async (req, res, next) => {
   try {
     const { email } = req.body;
     if (email) {
-        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        if (!emailRegex.test(email)) {
-            return next(new ErrorResponse('Please provide a valid email address!', 400, 'VALIDATION_ERROR'));
-        }
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(email)) {
+        return next(new ErrorResponse('Please provide a valid email address!', 400, 'VALIDATION_ERROR'));
+      }
     }
 
     const result = await EmployeeModel.update(req.params.id, req.body);
@@ -190,6 +190,28 @@ const updateProfilePicture = async (req, res, next) => {
       return next(new ErrorResponse('Please upload a file', 400, 'BAD_REQUEST'));
     }
 
+    const endpoint = process.env.R2_ENDPOINT || '';
+    const accessKey = process.env.R2_ACCESS_KEY_ID || '';
+    const secretKey = process.env.R2_SECRET_ACCESS_KEY || '';
+    const bucket = process.env.R2_BUCKET_NAME || '';
+
+    console.log(endpoint);
+    console.log(accessKey);
+
+    if (
+      !endpoint ||
+      !accessKey ||
+      !secretKey ||
+      !bucket
+    ) {
+      return next(
+        new ErrorResponse(
+          'Cloud storage (R2) is not configured. Please contact your administrator.',
+          503,
+          'SERVICE_UNAVAILABLE'
+        )
+      );
+    }
     // 1. Get current employee to check for old profile picture
     const employee = await EmployeeModel.getById(employeeId);
     if (!employee) {
@@ -205,13 +227,21 @@ const updateProfilePicture = async (req, res, next) => {
 
     // 4. Delete old file from R2 if it exists
     if (employee.profile_picture) {
-      await deleteFromR2(employee.profile_picture);
+      try {
+        await deleteFromR2(employee.profile_picture);
+      } catch (delErr) {
+        console.error('Failed to delete old profile picture from R2:', delErr.message);
+      }
     }
 
     sendResponse(res, 200, 'Profile picture updated successfully', {
       profile_picture: fileName
     });
   } catch (error) {
+    // Translate SSL/connection errors into user-friendly messages
+    if (error.message && (error.message.includes('EPROTO') || error.message.includes('ssl') || error.message.includes('SSL'))) {
+      return next(new ErrorResponse('Unable to connect to cloud storage. Please check R2 endpoint configuration.', 502, 'R2_CONNECTION_ERROR'));
+    }
     next(error);
   }
 };
