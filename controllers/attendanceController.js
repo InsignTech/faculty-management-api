@@ -59,7 +59,21 @@ const getMyAttendanceSummary = async (req, res, next) => {
 
         const month = req.query.month || new Date().getMonth() + 1;
         const year = req.query.year || new Date().getFullYear();
-        const summary = await AttendanceModel.getAttendanceSummary(targetEmpId, month, year);
+        let summary = await AttendanceModel.getAttendanceSummary(targetEmpId, month, year);
+        
+        // Ensure summary is an object even if no records found
+        if (!summary) {
+            summary = {
+                present_count: 0,
+                absent_count: 0,
+                late_count: 0,
+                early_leaving_count: 0,
+                regularized_count: 0,
+                onduty_count: 0,
+                leave_days: 0,
+                total_deductions: 0
+            };
+        }
 
         // Fetch Leave Balance
         try {

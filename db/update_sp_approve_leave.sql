@@ -70,26 +70,24 @@ proc: BEGIN
         SET @is_leave = 0;
         SET @leave_shift = NULL;
 
-        SELECT is_regularized, regularization_shift_type, is_leave, leave_shift_type 
-        INTO @is_reg, @reg_shift, @is_leave, @leave_shift
+        SELECT regularization_shift_type, is_leave, leave_shift_type 
+        INTO @reg_shift, @is_leave, @leave_shift
         FROM   attendance_daily
         WHERE  employee_id = v_emp_id AND date = v_current_date
         FOR UPDATE;
 
-        -- Check Regularization Conflict
-        IF @is_reg = 1 THEN
+        -- Check Regularization/On-Duty Conflict
+        IF @reg_shift IS NOT NULL THEN
             IF @reg_shift = 'FullDay' THEN
-                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Conflict: One or more days are already fully regularized';
+                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Conflict: One or more days are already fully regularized/on-duty';
             END IF;
 
             IF @reg_shift = v_leave_half AND v_leave_half != 'FullDay' THEN
-                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Conflict: This half of the day is already regularized';
+                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Conflict: This half of the day is already regularized/on-duty';
             END IF;
             
-            -- If we are applying for FullDay but one half is regularized, should we block?
-            -- Usually yes, or the user should regularize the other half instead of a full leave.
             IF v_leave_half = 'FullDay' AND @reg_shift != 'FullDay' THEN
-                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Conflict: A part of this day is already regularized. Cannot apply full-day leave.';
+                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Conflict: A part of this day is already regularized/on-duty. Cannot apply full-day leave.';
             END IF;
         END IF;
 
@@ -138,8 +136,8 @@ proc: BEGIN
         SET @reg_shift = NULL;
         SET @cur_shift = NULL;
 
-        SELECT is_regularized, regularization_shift_type, shift_type
-        INTO @is_reg, @reg_shift, @cur_shift
+        SELECT regularization_shift_type, onduty_shift_type, shift_type
+        INTO @reg_shift, @onduty_shift, @cur_shift
         FROM   attendance_daily
         WHERE  employee_id = v_emp_id AND date = v_current_date
         LIMIT  1;
@@ -215,7 +213,7 @@ proc: BEGIN
                 is_early_leaving, early_minutes,
                 overtime_minutes, deduction_days,
                 is_worked_on_holiday,
-                is_regularized, is_regularize_type,
+                regularization_shift_type,
                 is_leave, is_leave_type, leave_shift_type
             )
             VALUES (
@@ -223,7 +221,7 @@ proc: BEGIN
                 @first_in, @last_out, @worked_mins,
                 @final_shift, @final_status,
                 0, 0, 0, 0, 0, 0,
-                0, 0, NULL,
+                0, NULL,
                 1, v_leave_type, v_leave_half
             )
             ON DUPLICATE KEY UPDATE
@@ -235,8 +233,7 @@ proc: BEGIN
                 early_minutes      = 0,
                 overtime_minutes   = 0,
                 deduction_days     = 0,
-                is_regularized     = 0,
-                is_regularize_type = NULL,
+                regularization_shift_type = NULL,
                 is_leave           = 1,
                 is_leave_type      = v_leave_type,
                 leave_shift_type   = v_leave_half;
@@ -246,12 +243,18 @@ proc: BEGIN
         -- ─────────────────────────────────────────────────────────────────────
         ELSEIF v_leave_half = 'FirstHalf' THEN
 
-            -- Logic: If second half is covered by Physical Punch OR Regularization
-            SET @is_second_covered = IF(@cur_shift IN ('SecondHalf','FullDay') OR (@is_reg = 1 AND @reg_shift = 'SecondHalf'), 1, 0);
+            -- Logic: If second half is covered by Physical Punch OR Regularization OR On-Duty OR existing Leave
+            SET @is_second_covered = IF(
+                @cur_shift IN ('SecondHalf','FullDay') OR 
+                @reg_shift IN ('SecondHalf','FullDay') OR 
+                @onduty_shift IN ('SecondHalf','FullDay') OR
+                (@is_leave = 1 AND @leave_shift IN ('SecondHalf','FullDay')), 
+                1, 0
+            );
             
             SET @final_shift  = IF(@is_second_covered = 1, 'FullDay', 'FirstHalf');
             SET @final_status = IF(@is_second_covered = 1, 'Present', 'Leave');
-            SET @final_deduct = IF(@is_second_covered = 1, 0, 0.5);
+            SET @final_deduct = IF(@is_second_covered = 1, 0.00, 0.50);
 
             INSERT INTO attendance_daily (
                 employee_id, date,
@@ -261,7 +264,7 @@ proc: BEGIN
                 is_early_leaving, early_minutes,
                 overtime_minutes, deduction_days,
                 is_worked_on_holiday,
-                is_regularized, is_regularize_type, regularization_shift_type,
+                regularization_shift_type, onduty_shift_type,
                 is_leave, is_leave_type, leave_shift_type
             )
             VALUES (
@@ -270,7 +273,7 @@ proc: BEGIN
                 @final_shift, @final_status,
                 0, 0, 0, 0, 0,
                 @final_deduct,
-                0, @is_reg, NULL, @reg_shift,
+                0, @reg_shift, @onduty_shift,
                 1, v_leave_type, v_leave_half
             )
             ON DUPLICATE KEY UPDATE
@@ -286,12 +289,18 @@ proc: BEGIN
         -- ─────────────────────────────────────────────────────────────────────
         ELSEIF v_leave_half = 'SecondHalf' THEN
 
-            -- Logic: If first half is covered by Physical Punch OR Regularization
-            SET @is_first_covered = IF(@cur_shift IN ('FirstHalf','FullDay') OR (@is_reg = 1 AND @reg_shift = 'FirstHalf'), 1, 0);
+            -- Logic: If first half is covered by Physical Punch OR Regularization OR On-Duty OR existing Leave
+            SET @is_first_covered = IF(
+                @cur_shift IN ('FirstHalf','FullDay') OR 
+                @reg_shift IN ('FirstHalf','FullDay') OR 
+                @onduty_shift IN ('FirstHalf','FullDay') OR
+                (@is_leave = 1 AND @leave_shift IN ('FirstHalf','FullDay')), 
+                1, 0
+            );
 
             SET @final_shift  = IF(@is_first_covered = 1, 'FullDay', 'SecondHalf');
             SET @final_status = IF(@is_first_covered = 1, 'Present', 'Leave');
-            SET @final_deduct = IF(@is_first_covered = 1, 0, 0.5);
+            SET @final_deduct = IF(@is_first_covered = 1, 0.00, 0.50);
 
             INSERT INTO attendance_daily (
                 employee_id, date,
@@ -301,7 +310,7 @@ proc: BEGIN
                 is_early_leaving, early_minutes,
                 overtime_minutes, deduction_days,
                 is_worked_on_holiday,
-                is_regularized, is_regularize_type, regularization_shift_type,
+                regularization_shift_type, onduty_shift_type,
                 is_leave, is_leave_type, leave_shift_type
             )
             VALUES (
@@ -310,7 +319,7 @@ proc: BEGIN
                 @final_shift, @final_status,
                 0, 0, 0, 0, 0,
                 @final_deduct,
-                0, @is_reg, NULL, @reg_shift,
+                0, @reg_shift, @onduty_shift,
                 1, v_leave_type, v_leave_half
             )
             ON DUPLICATE KEY UPDATE
@@ -340,6 +349,75 @@ proc: BEGIN
         (SELECT total_days FROM leave_requests
          WHERE leave_request_id = p_leave_request_id) AS working_days_deducted;
 
+END //
+
+-- ─── Also Fix sp_apply_leave to match the new schema and controller parameters ───
+DROP PROCEDURE IF EXISTS `sp_apply_leave` //
+CREATE PROCEDURE `sp_apply_leave`(
+    IN p_employee_id  INT,
+    IN p_leave_type   VARCHAR(50),
+    IN p_start_date   DATE,
+    IN p_end_date     DATE,
+    IN p_half_type    VARCHAR(20),  -- 'FullDay', 'FirstHalf', 'SecondHalf'
+    IN p_reason       TEXT,
+    IN p_attachment   VARCHAR(512)
+)
+BEGIN
+    DECLARE v_total_days DECIMAL(5,2) DEFAULT 0;
+    DECLARE v_current_date DATE;
+    DECLARE v_skip TINYINT DEFAULT 0;
+
+    -- Validate date range
+    IF p_start_date > p_end_date THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Start date cannot be after end date';
+    END IF;
+
+    -- Half day must be a single day
+    IF p_half_type != 'FullDay' AND p_start_date != p_end_date THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Half day leave must be on a single date';
+    END IF;
+
+    -- Loop through each day, exclude Sundays and holidays
+    SET v_current_date = p_start_date;
+    WHILE v_current_date <= p_end_date DO
+        SET v_skip = 0;
+
+        -- Skip Sundays
+        IF DAYNAME(v_current_date) = 'Sunday' THEN
+            SET v_skip = 1;
+        END IF;
+
+        -- Skip holidays
+        IF v_skip = 0 AND EXISTS (
+            SELECT 1 FROM holiday_master
+            WHERE (v_current_date BETWEEN holiday_start_date AND holiday_end_date)
+              AND is_active = 1
+              AND (employee_id = -1 OR employee_id = p_employee_id)
+              AND holiday_type != 'WeekEnd'
+        ) THEN
+            SET v_skip = 1;
+        END IF;
+
+        IF v_skip = 0 THEN
+            IF p_half_type = 'FullDay' THEN
+                SET v_total_days = v_total_days + 1;
+            ELSE
+                SET v_total_days = v_total_days + 0.5;
+            END IF;
+        END IF;
+
+        SET v_current_date = DATE_ADD(v_current_date, INTERVAL 1 DAY);
+    END WHILE;
+
+    INSERT INTO leave_requests (
+        employee_id, leave_type, start_date, end_date, leave_half_type,
+        total_days, reason, attachment_path, status, applied_on
+    ) VALUES (
+        p_employee_id, p_leave_type, p_start_date, p_end_date, p_half_type,
+        v_total_days, p_reason, p_attachment, 'Pending', NOW()
+    );
+
+    SELECT LAST_INSERT_ID() AS leave_request_id, v_total_days AS total_days, 'Pending' AS status;
 END //
 
 DELIMITER ;

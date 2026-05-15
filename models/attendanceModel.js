@@ -53,22 +53,20 @@ class AttendanceModel {
 
     // Get attendance history for an employee
     static async getEmployeeAttendance(employeeId, month, year) {
-        const [rows] = await pool.execute('CALL sp_get_employee_attendance(?, ?, ?)', [employeeId, month, year]);
-        return rows[0];
+        const [rows] = await pool.query('CALL sp_get_employee_attendance(?, ?, ?)', [employeeId, month, year]);
+        return rows[0] || [];
     }
 
     // Get attendance summary (late count, deductions, etc.)
     static async getAttendanceSummary(employeeId, month, year) {
-        const [rows] = await pool.execute('CALL sp_get_attendance_summary(?, ?, ?)', [employeeId, month, year]);
-        return rows[0][0];
+        const [rows] = await pool.query('CALL sp_get_attendance_summary(?, ?, ?)', [employeeId, month, year]);
+        return (rows[0] && rows[0].length > 0) ? rows[0][0] : null;
     }
 
     // Get irregular attendance days (with deductions) for regularization
     static async getIrregularAttendance(employeeId, month, year) {
-        console.log(employeeId, month, year)
-        const [rows] = await pool.execute('CALL sp_get_irregular_attendance(?, ?, ?)', [employeeId, month, year]);
-        console.log(rows[0])
-        return rows[0];
+        const [rows] = await pool.query('CALL sp_get_irregular_attendance(?, ?, ?)', [employeeId, month, year]);
+        return rows[0] || [];
     }
 
     // Request an adjustment (Regularization / On-Duty)
@@ -197,22 +195,39 @@ class AttendanceModel {
                     throw new Error('Regularization cannot be requested for future dates.');
                 }
 
-                // Check if already completely regularized/covered
+                // Check if already completely regularized/covered in attendance_daily
                 if (row.regularization_shift_type === 'FullDay' || 
                     (requestedShift !== 'FullDay' && row.regularization_shift_type === requestedShift)) {
-                    throw new Error('This shift is already regularized.');
+                    throw new Error(`This ${requestedShift} shift is already regularized.`);
                 }
 
-                if (row.status === 'Present' && row.first_in_time && row.last_out_time && row.is_late === 0 && row.is_early_leaving === 0) {
-                    throw new Error('Attendance is already marked as complete and on-time for this date.');
+                // Strict "Present" Check: If they are Present and not late/early, they don't need regularization
+                // for the shift they are claiming. 
+                if (row.status === 'Present' && row.first_in_time && row.last_out_time) {
+                    if (requestedShift === 'FullDay' && row.is_late === 0 && row.is_early_leaving === 0) {
+                        throw new Error('Attendance is already marked as complete and on-time for this date.');
+                    }
+                    if (requestedShift === 'FirstHalf' && row.is_late === 0) {
+                        throw new Error('You were not late in the 1st half, regularization is not required.');
+                    }
+                    if (requestedShift === 'SecondHalf' && row.is_early_leaving === 0) {
+                        throw new Error('You did not leave early in the 2nd half, regularization is not required.');
+                    }
                 }
             }
 
-            // Cross-column overlap check (Approved states)
-            const activeShifts = [row.leave_shift_type, row.regularization_shift_type, row.onduty_shift_type].filter(s => s !== null);
-            for (const s of activeShifts) {
-                if (s === 'FullDay' || requestedShift === 'FullDay' || s === requestedShift) {
-                    throw new Error(`Overlap Error: This shift is already covered by an approved ${s === row.leave_shift_type ? 'Leave' : (s === row.onduty_shift_type ? 'On-Duty' : 'Regularization')}.`);
+            // Cross-column overlap check (Approved states in attendance_daily)
+            const activeStates = [
+                { type: 'Leave', shift: row.leave_shift_type },
+                { type: 'Regularization', shift: row.regularization_shift_type },
+                { type: 'On-Duty', shift: row.onduty_shift_type }
+            ];
+
+            for (const state of activeStates) {
+                if (state.shift) {
+                    if (state.shift === 'FullDay' || requestedShift === 'FullDay' || state.shift === requestedShift) {
+                        throw new Error(`Overlap Error: This shift is already covered by an approved ${state.type} (${state.shift}).`);
+                    }
                 }
             }
         }

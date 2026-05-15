@@ -27,8 +27,11 @@ BEGIN
         overtime_minutes,
         deduction_days,
         is_worked_on_holiday,
-        is_regularized,
-        is_regularize_type,
+        regularization_shift_type,
+        onduty_shift_type,
+        is_leave,
+        is_leave_type,
+        leave_shift_type,
         created_on
     FROM attendance_daily 
     WHERE employee_id = p_employee_id 
@@ -117,7 +120,7 @@ BEGIN
       AND MONTH(date) = p_month 
       AND YEAR(date) = p_year
       AND (deduction_days > 0 OR is_late = 1 OR is_early_leaving = 1)
-      AND is_regularized = 0
+      AND (regularization_shift_type IS NULL AND onduty_shift_type IS NULL AND is_leave = 0)
     ORDER BY date DESC;
 END //
 
