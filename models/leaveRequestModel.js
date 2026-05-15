@@ -44,98 +44,87 @@ class LeaveRequestModel {
     const halfType = leave_half_type || 'FullDay';
     const requestedDays = halfType !== 'FullDay' ? 0.5 : (total_days || 0);
 
-    // 1. Balance Validation
-    const balance = await this.getLeaveBalance(employee_id, new Date(start_date));
-    const leaveBalance = balance.find(b => b.leaveType === leave_type);
-    
-    if (!leaveBalance) {
-      throw new Error(`No policy found for leave type: ${leave_type}`);
-    }
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
 
-    if (leaveBalance.available < requestedDays) {
-      throw new Error(`Insufficient balance for ${leave_type}. Available: ${leaveBalance.available}, Requested: ${requestedDays}`);
-    }
-
-    // 2. Overlap Validation (Smart Half-Day Aware)
-    // Check against other leave requests
-    const [overlaps] = await pool.execute(
-      `SELECT start_date, end_date, leave_half_type, status 
-       FROM leave_requests 
-       WHERE employee_id = ? 
-         AND status IN ('Pending', 'Approved')
-         AND (? <= end_date AND ? >= start_date)`,
-      [employee_id, start_date, end_date]
-    );
-
-    if (overlaps.length > 0) {
-      const isConflict = overlaps.some(existing => {
-        if (existing.leave_half_type === 'FullDay') return true;
-        if (halfType === 'FullDay') return true;
-        if (existing.leave_half_type === halfType) return true;
-        return false;
-      });
-
-      if (isConflict) {
-        throw new Error('Leave request overlaps with an existing pending or approved leave.');
+      // 1. Balance Validation
+      const [balanceRows] = await conn.execute(
+        `SELECT leave_type, balance_leave
+         FROM employee_leaves 
+         WHERE emp_id = ? AND month_year = ?`,
+        [employee_id, `${String(new Date(start_date).getMonth() + 1).padStart(2, '0')}-${new Date(start_date).getFullYear()}`]
+      );
+      
+      const leaveBalance = balanceRows.find(b => b.leave_type === leave_type);
+      if (leaveBalance && parseFloat(leaveBalance.balance_leave) < requestedDays) {
+        throw new Error(`Insufficient balance for ${leave_type}. Available: ${leaveBalance.balance_leave}, Requested: ${requestedDays}`);
       }
-    }
 
-    // Check against approved adjustments (Regularization/On-Duty) in attendance_daily
-    const [adjOverlaps] = await pool.execute(
-      `SELECT date, regularization_shift_type, onduty_shift_type 
-       FROM attendance_daily 
-       WHERE employee_id = ? 
-         AND (date BETWEEN ? AND ?)
-         AND (regularization_shift_type IS NOT NULL OR onduty_shift_type IS NOT NULL)`,
-      [employee_id, start_date, end_date]
-    );
+      // 2. Overlap Validation
+      const [overlaps] = await conn.execute(
+        `SELECT leave_half_type FROM leave_requests 
+         WHERE employee_id = ? AND status IN ('Pending', 'Approved')
+           AND (? <= end_date AND ? >= start_date)`,
+        [employee_id, start_date, end_date]
+      );
 
-    if (adjOverlaps.length > 0) {
-      const isAdjConflict = adjOverlaps.some(adj => {
-        const adjShift = adj.regularization_shift_type || adj.onduty_shift_type;
-        if (adjShift === 'FullDay') return true;
-        if (halfType === 'FullDay') return true;
-        if (adjShift === halfType) return true;
-        return false;
-      });
-
-      if (isAdjConflict) {
-        throw new Error('Leave request overlaps with an approved regularization or on-duty shift.');
+      if (overlaps.length > 0) {
+        const isConflict = overlaps.some(existing => {
+          if (existing.leave_half_type === 'FullDay') return true;
+          if (halfType === 'FullDay') return true;
+          if (existing.leave_half_type === halfType) return true;
+          return false;
+        });
+        if (isConflict) throw new Error('Leave request overlaps with an existing leave.');
       }
+
+      // Check against approved adjustments in attendance_daily
+      const [adjOverlaps] = await conn.execute(
+        `SELECT date, regularization_shift_type, onduty_shift_type 
+         FROM attendance_daily 
+         WHERE employee_id = ? 
+           AND (date BETWEEN ? AND ?)
+           AND (regularization_shift_type IS NOT NULL OR onduty_shift_type IS NOT NULL)`,
+        [employee_id, start_date, end_date]
+      );
+
+      if (adjOverlaps.length > 0) {
+        const isAdjConflict = adjOverlaps.some(adj => {
+          const adjShift = adj.regularization_shift_type || adj.onduty_shift_type;
+          if (adjShift === 'FullDay') return true;
+          if (halfType === 'FullDay') return true;
+          if (adjShift === halfType) return true;
+          return false;
+        });
+        if (isAdjConflict) throw new Error('Leave request overlaps with an approved regularization or on-duty shift.');
+      }
+
+      // 3. Call SP to apply leave
+      const [rows] = await conn.execute(
+        'CALL sp_apply_leave(?, ?, ?, ?, ?, ?, ?)',
+        [employee_id, leave_type, start_date, end_date, halfType, reason, attachment_path || null]
+      );
+      
+      const result = rows[0][0];
+
+      // 4. Correct total_days if necessary
+      if (result && result.leave_request_id && (!result.total_days || result.total_days == 0)) {
+         if (halfType !== 'FullDay') {
+            await conn.execute('UPDATE leave_requests SET total_days = 0.5 WHERE leave_request_id = ?', [result.leave_request_id]);
+         } else if (total_days > 0) {
+            await conn.execute('UPDATE leave_requests SET total_days = ? WHERE leave_request_id = ?', [total_days, result.leave_request_id]);
+         }
+      }
+
+      await conn.commit();
+      return result;
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
     }
-
-    // 3. Call SP to apply leave
-    const [rows] = await pool.execute(
-      'CALL sp_apply_leave(?, ?, ?, ?, ?, ?, ?)',
-      [
-        employee_id,
-        leave_type,
-        start_date,
-        end_date,
-        halfType,
-        reason,
-        attachment_path || null
-      ]
-    );
-    
-    const result = rows[0][0];
-
-    // Double check total_days update
-    if (result && result.leave_request_id && (!result.total_days || result.total_days == 0)) {
-       if (halfType !== 'FullDay') {
-          await pool.execute(
-            'UPDATE leave_requests SET total_days = 0.5 WHERE leave_request_id = ?',
-            [result.leave_request_id]
-          );
-       } else if (total_days > 0) {
-          await pool.execute(
-            'UPDATE leave_requests SET total_days = ? WHERE leave_request_id = ?',
-            [total_days, result.leave_request_id]
-          );
-       }
-    }
-
-    return result;
   };
 
   static async getById(id) {

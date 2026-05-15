@@ -20,53 +20,58 @@ class EmployeeModel {
   }
 
   static async create(data) {
-    let reportingManagerId = data.reporting_manager_id || data.manager_id || null;
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
 
-    // If no manager specified, try to find the Principal
-    if (!reportingManagerId) {
-      reportingManagerId = await this.getPrincipalId();
-    }
+      let reportingManagerId = data.reporting_manager_id || data.manager_id || null;
 
-    const [rows] = await pool.execute(
-      'CALL sp_create_employee(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [
-        data.organization_id || 1,
-        data.employee_code || '',
-        data.employee_name || '',
-        data.email || '',
-        data.employee_role || 0,
-        data.designation_id || 0,
-        reportingManagerId,
-        data.joining_date || null,
-        data.active !== undefined ? data.active : 1,
-        data.created_by || 'admin',
-        data.department_id || 0,
-        data.basic_pay || 0.00
-      ]
-    );
-    const employee = rows[0][0];
+      // If no manager specified, try to find the Principal
+      if (!reportingManagerId) {
+        reportingManagerId = await this.getPrincipalId();
+      }
 
-    // Create user account for new employee
-    if (employee && employee.employee_id && data.email) {
-      try {
+      const [rows] = await conn.execute(
+        'CALL sp_create_employee(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [
+          data.organization_id || 1,
+          data.employee_code || '',
+          data.employee_name || '',
+          data.email || '',
+          data.employee_role || 0,
+          data.designation_id || 0,
+          reportingManagerId,
+          data.joining_date || null,
+          data.active !== undefined ? data.active : 1,
+          data.created_by || 'admin',
+          data.department_id || 0,
+          data.basic_pay || 0.00
+        ]
+      );
+      const employee = rows[0][0];
+
+      // Create user account for new employee
+      if (employee && employee.employee_id && data.email) {
         const defaultPassword = `${data.employee_code || 'User'}@123`;
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(defaultPassword, salt);
 
-        await UserModel.signup(
-          data.employee_name,
-          data.email,
-          hashedPassword,
-          data.role_id || 1,
-          employee.employee_id
+        await conn.execute(
+          `INSERT INTO user_accounts 
+          (user_display_name, email, user_password, role_id, employee_id, active, created_on, created_by) 
+          VALUES (?, ?, ?, ?, ?, 1, NOW(), 'system')`,
+          [data.employee_name, data.email, hashedPassword, data.employee_role || 1, employee.employee_id]
         );
-      } catch (err) {
-        console.error('Failed to create user account for employee:', err.message);
-        // We still return the employee as they were created, but log the error
       }
-    }
 
-    return employee;
+      await conn.commit();
+      return employee;
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
+    }
   }
 
   static async getAll(limit = 10, offset = 0) {

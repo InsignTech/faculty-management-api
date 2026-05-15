@@ -32,22 +32,46 @@ class LeavePolicyModel {
       throw new Error('Policy dates overlap with an existing policy');
     }
 
-    const [result] = await pool.execute(
-      'INSERT INTO leave_policy (policy_name, start_date, end_date, policy_value, active, created_by, created_on) VALUES (?, ?, ?, ?, ?, ?, NOW())',
-      [
-        data.policy_name,
-        data.start_date,
-        data.end_date || null,
-        JSON.stringify(data.policy_value),
-        data.active ? 1 : 0,
-        data.created_by || 'admin'
-      ]
-    );
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
 
-    const newId = result.insertId;
-    await this.logHistory(newId, { ...data, change_type: 'Created' });
-    
-    return { leave_policy_id: newId, ...data };
+      const [result] = await conn.execute(
+        'INSERT INTO leave_policy (policy_name, start_date, end_date, policy_value, active, created_by, created_on) VALUES (?, ?, ?, ?, ?, ?, NOW())',
+        [
+          data.policy_name,
+          data.start_date,
+          data.end_date || null,
+          JSON.stringify(data.policy_value),
+          data.active ? 1 : 0,
+          data.created_by || 'admin'
+        ]
+      );
+
+      const newId = result.insertId;
+      
+      // Log History inside transaction
+      await conn.execute(
+          'INSERT INTO leave_policy_history (leave_policy_id, policy_name, policy_value, start_date, end_date, changed_by, change_type) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          [
+              newId,
+              data.policy_name,
+              JSON.stringify(data.policy_value),
+              data.start_date,
+              data.end_date || null,
+              data.created_by || 'admin',
+              'Created'
+          ]
+      );
+
+      await conn.commit();
+      return { leave_policy_id: newId, ...data };
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
+    }
   }
 
   static async updateSystemPolicy(id, data) {
@@ -55,37 +79,78 @@ class LeavePolicyModel {
       throw new Error('Policy dates overlap with an existing policy');
     }
 
-    await pool.execute(
-      'UPDATE leave_policy SET policy_name = ?, start_date = ?, end_date = ?, policy_value = ? WHERE leave_policy_id = ?',
-      [
-        data.policy_name,
-        data.start_date,
-        data.end_date || null,
-        JSON.stringify(data.policy_value),
-        id
-      ]
-    );
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
 
-    await this.logHistory(id, { ...data, change_type: 'Updated' });
+      await conn.execute(
+        'UPDATE leave_policy SET policy_name = ?, start_date = ?, end_date = ?, policy_value = ? WHERE leave_policy_id = ?',
+        [
+          data.policy_name,
+          data.start_date,
+          data.end_date || null,
+          JSON.stringify(data.policy_value),
+          id
+        ]
+      );
 
-    return { leave_policy_id: id, ...data };
+      // Log History inside transaction
+      await conn.execute(
+          'INSERT INTO leave_policy_history (leave_policy_id, policy_name, policy_value, start_date, end_date, changed_by, change_type) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          [
+              id,
+              data.policy_name,
+              JSON.stringify(data.policy_value),
+              data.start_date,
+              data.end_date || null,
+              data.modified_by || 'admin',
+              'Updated'
+          ]
+      );
+
+      await conn.commit();
+      return { leave_policy_id: id, ...data };
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
+    }
   }
 
   static async setActiveSystemPolicy(id, changedBy = 'admin') {
-    await pool.execute('UPDATE leave_policy SET active = 0');
-    await pool.execute('UPDATE leave_policy SET active = 1 WHERE leave_policy_id = ?', [id]);
-    
-    // Log activation in history
-    const [rows] = await pool.execute('SELECT * FROM leave_policy WHERE leave_policy_id = ?', [id]);
-    if (rows.length > 0) {
-        await this.logHistory(id, { 
-            ...rows[0], 
-            policy_value: JSON.parse(rows[0].policy_value),
-            created_by: changedBy, 
-            change_type: 'Activated' 
-        });
+    const conn = await pool.getConnection();
+    try {
+        await conn.beginTransaction();
+
+        await conn.execute('UPDATE leave_policy SET active = 0');
+        await conn.execute('UPDATE leave_policy SET active = 1 WHERE leave_policy_id = ?', [id]);
+        
+        // Log activation in history
+        const [rows] = await conn.execute('SELECT * FROM leave_policy WHERE leave_policy_id = ?', [id]);
+        if (rows.length > 0) {
+            await conn.execute(
+                'INSERT INTO leave_policy_history (leave_policy_id, policy_name, policy_value, start_date, end_date, changed_by, change_type) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                [
+                    id,
+                    rows[0].policy_name,
+                    rows[0].policy_value,
+                    rows[0].start_date,
+                    rows[0].end_date || null,
+                    changedBy,
+                    'Activated'
+                ]
+            );
+        }
+
+        await conn.commit();
+        return true;
+    } catch (err) {
+        await conn.rollback();
+        throw err;
+    } finally {
+        conn.release();
     }
-    return true;
   }
 
   static async logHistory(policyId, data) {
