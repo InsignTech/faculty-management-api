@@ -125,13 +125,13 @@ class ReportModel {
                         status = 'On-Duty + Leave';
                         const leaveInfo = dayLeaves.length > 0 
                             ? dayLeaves.map(l => `${l.leave_type} (${l.leave_half_type || 'FullDay'})`).join(', ')
-                            : (dayAttendance.is_leave_type || 'Leave');
+                            : (empLeave ? empLeave.leave_type : 'Leave');
                         remark = `${leaveInfo} (OD)`;
                     } else if (isReg && isLeave) {
                         status = 'Regularized + Leave';
                         const leaveInfo = dayLeaves.length > 0 
                             ? dayLeaves.map(l => `${l.leave_type} (${l.leave_half_type || 'FullDay'})`).join(', ')
-                            : (dayAttendance.is_leave_type || 'Leave');
+                            : (empLeave ? empLeave.leave_type : 'Leave');
                         remark = `${leaveInfo} (Reg)`;
                     }
                     // If it's a processed non-working day, respect that status
@@ -140,7 +140,7 @@ class ReportModel {
                         if (dayAttendance.status === 'Leave') {
                             remark = dayLeaves.length > 0 
                                 ? dayLeaves.map(l => `${l.leave_type} (${l.leave_half_type || 'FullDay'})`).join(', ')
-                                : (dayAttendance.is_leave_type || 'Leave');
+                                : (empLeave ? empLeave.leave_type : 'Leave');
                         } else {
                             remark = dayAttendance.status;
                         }
@@ -183,7 +183,7 @@ class ReportModel {
                     employee_id: emp.employee_id,
                     employee_code: emp.employee_code,
                     employee_name: emp.employee_name,
-                    department: emp.department, // Fixed from emp.departmentname
+                    department: emp.department, 
                     date: dateStr,
                     status: status,
                     remark: remark,
@@ -198,7 +198,7 @@ class ReportModel {
                     regularization_shift_type: dayAttendance ? dayAttendance.regularization_shift_type : null,
                     onduty_shift_type: dayAttendance ? dayAttendance.onduty_shift_type : null,
                     is_leave: dayAttendance ? (dayAttendance.is_leave || (dayAttendance.leave_shift_type ? 1 : 0)) : (empLeave ? 1 : 0),
-                    is_leave_type: dayAttendance ? dayAttendance.is_leave_type : (empLeave ? empLeave.leave_type : null),
+                    is_leave_type: empLeave ? empLeave.leave_type : (dayAttendance && dayAttendance.status === 'Leave' ? 'Leave' : null),
                     leave_shift_type: dayAttendance ? dayAttendance.leave_shift_type : (empLeave ? empLeave.leave_half_type : null)
                 });
             }
