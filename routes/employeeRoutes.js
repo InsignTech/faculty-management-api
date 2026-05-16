@@ -10,6 +10,7 @@ const {
   updateReportingManager,
   getSubordinates,
   updateProfilePicture,
+  uploadDocument,
 } = require('../controllers/employeeController');
 const { protect, authorize } = require('../middleware/auth');
 const multer = require('multer');
@@ -27,6 +28,7 @@ router.get('/subordinates', authorize('Admin', 'admin', 'principal', 'super_admi
 
 router.get('/me', getMe);
 router.post('/profile-picture', upload.single('profile_picture'), updateProfilePicture);
+router.post('/upload-document', upload.single('document'), uploadDocument);
 
 router.get('/:id', authorize('Admin', 'admin', 'principal', 'super_admin', 'HOD', 'hod'), getEmployeeById);
 router.put('/:id', authorize('Admin', 'admin', 'principal', 'super_admin'), updateEmployee);

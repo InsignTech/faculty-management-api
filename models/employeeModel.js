@@ -64,6 +64,39 @@ class EmployeeModel {
         );
       }
 
+      
+      // Update personal details
+      await conn.query(
+        `UPDATE employee SET 
+          title = ?, gender = ?, dob = ?, marital_status = ?, nationality = ?, 
+          blood_group = ?, place_of_birth = ?, state_of_birth = ?, religion = ?, 
+          identification_mark = ?, mother_tongue = ? 
+         WHERE employee_id = ?`,
+         [
+           data.title || null, data.gender || null, data.dob || null, data.marital_status || null, data.nationality || null,
+           data.blood_group || null, data.place_of_birth || null, data.state_of_birth || null, data.religion || null,
+           data.identification_mark || null, data.mother_tongue || null,
+           employee.employee_id
+         ]
+      );
+
+      // Insert personal IDs
+      await conn.query(
+        `INSERT INTO employee_personal_ids 
+         (employee_id, aadhar_number, aadhar_file, pan_number, pan_file, passport_number, passport_file, 
+          voter_id_number, voter_id_file, driving_licence_number, driving_licence_file, uan_number, uan_file)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         [
+           employee.employee_id,
+           data.personal_ids?.aadhar_number || null, data.personal_ids?.aadhar_file || null,
+           data.personal_ids?.pan_number || null, data.personal_ids?.pan_file || null,
+           data.personal_ids?.passport_number || null, data.personal_ids?.passport_file || null,
+           data.personal_ids?.voter_id_number || null, data.personal_ids?.voter_id_file || null,
+           data.personal_ids?.driving_licence_number || null, data.personal_ids?.driving_licence_file || null,
+           data.personal_ids?.uan_number || null, data.personal_ids?.uan_file || null
+         ]
+      );
+
       await conn.commit();
       return employee;
     } catch (err) {
@@ -194,25 +227,33 @@ class EmployeeModel {
 
   static async getById(id) {
     const [rows] = await pool.execute('CALL sp_get_employee_by_id(?)', [id]);
-    return rows[0][0];
+    let emp = rows[0][0];
+    if (emp) {
+        const [idRows] = await pool.execute('SELECT * FROM employee_personal_ids WHERE employee_id = ?', [id]);
+        if (idRows.length > 0) {
+            emp.personal_ids = idRows[0];
+        }
+    }
+    return emp;
   }
 
   static async update(id, data) {
     const [rows] = await pool.query(
-      'CALL sp_update_employee(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'CALL sp_update_employee(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       [
         id,
         data.organization_id || 1,
         data.employee_code || '',
         data.employee_name || '',
+        data.email || '',
         data.employee_role || 0,
         data.designation_id || 0,
-        data.employee_type || '',   // ⚠️ you were missing this earlier
         data.reporting_manager_id || null,
         data.joining_date || null,
         data.active !== undefined ? data.active : 1,
         data.modified_by || 'admin',
-        data.department_id || 0
+        data.department_id || 0,
+        data.basic_pay || 0.00
       ]
     );
 
@@ -227,7 +268,65 @@ class EmployeeModel {
       }
     }
 
+    
+    // Update personal details
+    await pool.query(
+      `UPDATE employee SET 
+        title = COALESCE(?, title), gender = COALESCE(?, gender), dob = COALESCE(?, dob), 
+        marital_status = COALESCE(?, marital_status), nationality = COALESCE(?, nationality), 
+        blood_group = COALESCE(?, blood_group), place_of_birth = COALESCE(?, place_of_birth), 
+        state_of_birth = COALESCE(?, state_of_birth), religion = COALESCE(?, religion), 
+        identification_mark = COALESCE(?, identification_mark), mother_tongue = COALESCE(?, mother_tongue)
+       WHERE employee_id = ?`,
+       [
+         data.title !== undefined ? data.title : null, 
+         data.gender !== undefined ? data.gender : null, 
+         data.dob !== undefined ? data.dob : null, 
+         data.marital_status !== undefined ? data.marital_status : null, 
+         data.nationality !== undefined ? data.nationality : null,
+         data.blood_group !== undefined ? data.blood_group : null, 
+         data.place_of_birth !== undefined ? data.place_of_birth : null, 
+         data.state_of_birth !== undefined ? data.state_of_birth : null, 
+         data.religion !== undefined ? data.religion : null,
+         data.identification_mark !== undefined ? data.identification_mark : null, 
+         data.mother_tongue !== undefined ? data.mother_tongue : null,
+         id
+       ]
+    );
+
+    if (data.personal_ids) {
+        await pool.query(
+          `INSERT INTO employee_personal_ids 
+           (employee_id, aadhar_number, aadhar_file, pan_number, pan_file, passport_number, passport_file, 
+            voter_id_number, voter_id_file, driving_licence_number, driving_licence_file, uan_number, uan_file)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON DUPLICATE KEY UPDATE 
+           aadhar_number=COALESCE(VALUES(aadhar_number), aadhar_number), aadhar_file=COALESCE(VALUES(aadhar_file), aadhar_file),
+           pan_number=COALESCE(VALUES(pan_number), pan_number), pan_file=COALESCE(VALUES(pan_file), pan_file),
+           passport_number=COALESCE(VALUES(passport_number), passport_number), passport_file=COALESCE(VALUES(passport_file), passport_file),
+           voter_id_number=COALESCE(VALUES(voter_id_number), voter_id_number), voter_id_file=COALESCE(VALUES(voter_id_file), voter_id_file),
+           driving_licence_number=COALESCE(VALUES(driving_licence_number), driving_licence_number), driving_licence_file=COALESCE(VALUES(driving_licence_file), driving_licence_file),
+           uan_number=COALESCE(VALUES(uan_number), uan_number), uan_file=COALESCE(VALUES(uan_file), uan_file)`,
+           [
+             id,
+             (data.personal_ids.aadhar_number !== undefined && data.personal_ids.aadhar_number !== '') ? data.personal_ids.aadhar_number : null, 
+             (data.personal_ids.aadhar_file !== undefined && data.personal_ids.aadhar_file !== '') ? data.personal_ids.aadhar_file : null,
+             (data.personal_ids.pan_number !== undefined && data.personal_ids.pan_number !== '') ? data.personal_ids.pan_number : null, 
+             (data.personal_ids.pan_file !== undefined && data.personal_ids.pan_file !== '') ? data.personal_ids.pan_file : null,
+             (data.personal_ids.passport_number !== undefined && data.personal_ids.passport_number !== '') ? data.personal_ids.passport_number : null, 
+             (data.personal_ids.passport_file !== undefined && data.personal_ids.passport_file !== '') ? data.personal_ids.passport_file : null,
+             (data.personal_ids.voter_id_number !== undefined && data.personal_ids.voter_id_number !== '') ? data.personal_ids.voter_id_number : null, 
+             (data.personal_ids.voter_id_file !== undefined && data.personal_ids.voter_id_file !== '') ? data.personal_ids.voter_id_file : null,
+             (data.personal_ids.driving_licence_number !== undefined && data.personal_ids.driving_licence_number !== '') ? data.personal_ids.driving_licence_number : null, 
+             (data.personal_ids.driving_licence_file !== undefined && data.personal_ids.driving_licence_file !== '') ? data.personal_ids.driving_licence_file : null,
+             (data.personal_ids.uan_number !== undefined && data.personal_ids.uan_number !== '') ? data.personal_ids.uan_number : null, 
+             (data.personal_ids.uan_file !== undefined && data.personal_ids.uan_file !== '') ? data.personal_ids.uan_file : null
+           ]
+        );
+    }
+
     return result;
+
   }
 
   static async delete(id) {

@@ -246,7 +246,22 @@ const updateProfilePicture = async (req, res, next) => {
   }
 };
 
+
+const uploadDocument = async (req, res, next) => {
+  try {
+    if (!req.file) {
+      return next(new ErrorResponse('Please upload a file', 400, 'BAD_REQUEST'));
+    }
+    const { uploadToR2 } = require('../utils/s3Service');
+    const fileName = await uploadToR2(req.file.buffer, req.file.originalname, 'documents');
+    sendResponse(res, 200, 'Document uploaded successfully', { file_url: fileName });
+  } catch(error) {
+    next(error);
+  }
+};
+
 module.exports = {
+  uploadDocument,
   createEmployee,
   getEmployees,
   getPotentialManagers,
