@@ -1,6 +1,6 @@
 const express = require('express');
-const { getLeaveRequests, createLeaveRequest, getTeamRequests, updateRequestStatus, getEmployeeBalance, checkHolidays, cancelLeaveRequest } = require('../controllers/leaveRequestController');
-const { protect } = require('../middleware/auth');
+const { getLeaveRequests, createLeaveRequest, getTeamRequests, updateRequestStatus, getEmployeeBalance, checkHolidays, cancelLeaveRequest, superAdminApplyLeave } = require('../controllers/leaveRequestController');
+const { protect, authorize } = require('../middleware/auth');
 const router = express.Router();
 
 router.use(protect);
@@ -13,6 +13,8 @@ router.get('/balance/:employeeId', getEmployeeBalance);
 router.get('/holidays-check', checkHolidays);
 router.delete('/:id', cancelLeaveRequest);
 
-
+// Super admin override route
+router.post('/super-admin/apply-leave', authorize('super_admin', 'principal', 'Super Admin', 'Principal'), superAdminApplyLeave);
 
 module.exports = router;
+

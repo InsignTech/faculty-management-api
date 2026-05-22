@@ -312,6 +312,65 @@ const uploadMachineLogs = async (req, res, next) => {
     }
 };
 
+const isPreviousMonth = (dateStr) => {
+    if (!dateStr) return false;
+    const targetDate = new Date(dateStr);
+    const currentDate = new Date();
+    
+    const targetYear = targetDate.getFullYear();
+    const targetMonth = targetDate.getMonth();
+    
+    const currentYear = currentDate.getFullYear();
+    const currentMonth = currentDate.getMonth();
+    
+    if (targetYear < currentYear) return true;
+    if (targetYear === currentYear && targetMonth < currentMonth) return true;
+    return false;
+};
+
+const superAdminUpdateAttendance = async (req, res, next) => {
+    try {
+        const { employee_id, date, confirmPreviousMonth } = req.body;
+        if (!employee_id || !date) {
+            return next(new ErrorResponse('employee_id and date are required', 400));
+        }
+
+        if (isPreviousMonth(date) && !confirmPreviousMonth) {
+            return res.status(200).json({
+                success: false,
+                warning: 'previous_month_warning',
+                message: 'Warning: This date is in a previous month. Salary calculation has already been processed for this period. Please confirm to proceed.'
+            });
+        }
+
+        const result = await AttendanceModel.superAdminUpdateDaily(req.body);
+        sendResponse(res, 200, 'Daily attendance record updated successfully', result);
+    } catch (error) { next(error); }
+};
+
+const superAdminApplyAdjustment = async (req, res, next) => {
+    try {
+        const { employee_id, type, date, from_date, confirmPreviousMonth } = req.body;
+        const targetDate = date || from_date;
+
+        if (!employee_id || !type || !targetDate) {
+            return next(new ErrorResponse('employee_id, type, and date are required', 400));
+        }
+
+        if (isPreviousMonth(targetDate) && !confirmPreviousMonth) {
+            return res.status(200).json({
+                success: false,
+                warning: 'previous_month_warning',
+                message: 'Warning: This date is in a previous month. Salary calculation has already been processed for this period. Please confirm to proceed.'
+            });
+        }
+
+        const approverId = req.user.employeeId || req.user.id || 1;
+        const result = await AttendanceModel.superAdminCreateAdjustment(req.body, approverId);
+        sendResponse(res, 201, 'Adjustment applied and approved successfully', result);
+    } catch (error) { next(error); }
+};
+
 module.exports = {
     processAttendanceLogs,
     getMyAttendance,
@@ -323,5 +382,7 @@ module.exports = {
     approveAdjustment,
     rejectAdjustment,
     deleteAdjustment,
-    uploadMachineLogs
+    uploadMachineLogs,
+    superAdminUpdateAttendance,
+    superAdminApplyAdjustment
 };

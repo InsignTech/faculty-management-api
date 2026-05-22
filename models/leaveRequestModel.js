@@ -220,6 +220,73 @@ class LeaveRequestModel {
       };
     });
   }
+
+  static async superAdminCreateLeave(data, superAdminEmployeeId) {
+    const { employee_id, leave_type, start_date, end_date, leave_half_type, reason, attachment_path, total_days, check_balance } = data;
+    
+    const halfType = leave_half_type || 'FullDay';
+    const requestedDays = halfType !== 'FullDay' ? 0.5 : (total_days || 0);
+
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+
+      if (check_balance) {
+        const balances = await LeaveRequestModel.getLeaveBalance(employee_id, new Date(start_date));
+        const leaveBalance = balances.find(b => b.leaveType === leave_type);
+        if (!leaveBalance) {
+          throw new Error(`Employee does not have leave type "${leave_type}" in their active policy.`);
+        }
+        if (leaveBalance.available < requestedDays) {
+          throw new Error(`Insufficient balance for "${leave_type}". Available: ${leaveBalance.available}, Requested: ${requestedDays}`);
+        }
+      }
+
+      // Bypassing balance check completely!
+      const [rows] = await conn.execute(
+        'CALL sp_apply_leave(?, ?, ?, ?, ?, ?, ?)',
+        [employee_id, leave_type, start_date, end_date, halfType, reason, attachment_path || null]
+      );
+      
+      const result = rows[0][0];
+
+      if (!result || !result.leave_request_id) {
+        throw new Error('Failed to create leave request via database stored procedure.');
+      }
+
+      const leaveRequestId = result.leave_request_id;
+
+      // Correct total_days if necessary
+      if (result && leaveRequestId && (!result.total_days || result.total_days == 0)) {
+         if (halfType !== 'FullDay') {
+            await conn.execute('UPDATE leave_requests SET total_days = 0.5 WHERE leave_request_id = ?', [leaveRequestId]);
+         } else if (total_days > 0) {
+            await conn.execute('UPDATE leave_requests SET total_days = ? WHERE leave_request_id = ?', [total_days, leaveRequestId]);
+         }
+      }
+
+      await conn.commit();
+
+      // Immediately approve it!
+      await conn.execute(
+        'CALL sp_approve_leave(?, ?, ?, ?)',
+        [
+          leaveRequestId,
+          superAdminEmployeeId,
+          'Approved',
+          'Super Admin Direct Bypass Approval'
+        ]
+      );
+
+      return { success: true, leave_request_id: leaveRequestId };
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
+    }
+  }
 }
 
 module.exports = LeaveRequestModel;
+

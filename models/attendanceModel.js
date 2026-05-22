@@ -576,6 +576,113 @@ class AttendanceModel {
             conn.release();
         }
     }
+
+    // Super Admin: Direct Daily Attendance Update (upsert)
+    static async superAdminUpdateDaily(data) {
+        const {
+            employee_id,
+            date,
+            status,
+            first_in_time,
+            last_out_time,
+            is_late,
+            is_early_leaving,
+            deduction_days,
+            regularization_shift_type,
+            onduty_shift_type,
+            leave_shift_type
+        } = data;
+
+        let worked_mins = 0;
+        if (first_in_time && last_out_time) {
+            const [inH, inM, inS] = first_in_time.split(':').map(Number);
+            const [outH, outM, outS] = last_out_time.split(':').map(Number);
+            const inMins = inH * 60 + (inM || 0);
+            const outMins = outH * 60 + (outM || 0);
+            if (outMins >= inMins) {
+                worked_mins = outMins - inMins;
+            }
+        }
+
+        const conn = await pool.getConnection();
+        try {
+            await conn.beginTransaction();
+
+            await conn.execute(
+                `INSERT INTO attendance_daily (
+                    employee_id, date, status, first_in_time, last_out_time, worked_mins,
+                    is_late, is_early_leaving, deduction_days,
+                    regularization_shift_type, onduty_shift_type, leave_shift_type,
+                    created_on
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                ON DUPLICATE KEY UPDATE
+                    status = VALUES(status),
+                    first_in_time = VALUES(first_in_time),
+                    last_out_time = VALUES(last_out_time),
+                    worked_mins = VALUES(worked_mins),
+                    is_late = VALUES(is_late),
+                    is_early_leaving = VALUES(is_early_leaving),
+                    deduction_days = VALUES(deduction_days),
+                    regularization_shift_type = VALUES(regularization_shift_type),
+                    onduty_shift_type = VALUES(onduty_shift_type),
+                    leave_shift_type = VALUES(leave_shift_type)`,
+                [
+                    employee_id, date, status,
+                    first_in_time || null, last_out_time || null, worked_mins,
+                    is_late || 0, is_early_leaving || 0, deduction_days || 0.00,
+                    regularization_shift_type || null, onduty_shift_type || null, leave_shift_type || null
+                ]
+            );
+
+            await conn.commit();
+            return { success: true, message: 'Daily attendance updated successfully.' };
+        } catch (err) {
+            await conn.rollback();
+            throw err;
+        } finally {
+            conn.release();
+        }
+    }
+
+    // Super Admin: Direct Adjustment Application (Bypass limits, auto-approve)
+    static async superAdminCreateAdjustment(data, approverId) {
+        const { employee_id, type, date, from_date, to_date, requested_in_time, requested_out_time, regularization_shift_type, reason } = data;
+
+        // Verify employee is active
+        const [empRows] = await pool.query('SELECT active FROM employee WHERE employee_id = ?', [employee_id]);
+        if (!empRows.length || empRows[0].active === 0) {
+            throw new Error('Adjustment requests can only be submitted for active employees.');
+        }
+
+        const targetDate = date || from_date;
+        const requestedShift = regularization_shift_type || 'FullDay';
+
+        const conn = await pool.getConnection();
+        try {
+            await conn.beginTransaction();
+
+            const [result] = await conn.execute(
+                `INSERT INTO attendance_regularization 
+                (employee_id, request_type, date, requested_in_time, requested_out_time, regularization_shift_type, reason, status, created_on) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'Pending', NOW())`,
+                [employee_id, type, targetDate, requested_in_time || null, requested_out_time || null, requestedShift, reason]
+            );
+
+            const adjustmentId = result.insertId;
+
+            await conn.commit();
+
+            const approveRes = await this.approveAdjustment(adjustmentId, approverId, 'Super Admin Direct Bypass Approval');
+
+            return { success: true, adjustment_id: adjustmentId, ...approveRes };
+        } catch (err) {
+            await conn.rollback();
+            throw err;
+        } finally {
+            conn.release();
+        }
+    }
 }
 
 module.exports = AttendanceModel;
+

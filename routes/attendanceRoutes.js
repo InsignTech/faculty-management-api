@@ -10,7 +10,9 @@ const {
     approveAdjustment,
     rejectAdjustment,
     deleteAdjustment,
-    uploadMachineLogs
+    uploadMachineLogs,
+    superAdminUpdateAttendance,
+    superAdminApplyAdjustment
 } = require('../controllers/attendanceController');
 const { protect, authorize, protectMachine } = require('../middleware/auth');
 const router = express.Router();
@@ -21,7 +23,12 @@ router.post('/machine-logs', protectMachine, uploadMachineLogs);
 // All other routes are protected by standard JWT
 router.use(protect);
 
+// Super admin override routes
+router.put('/super-admin/update-attendance', authorize('super_admin', 'principal', 'Super Admin', 'Principal'), superAdminUpdateAttendance);
+router.post('/super-admin/apply-adjustment', authorize('super_admin', 'principal', 'Super Admin', 'Principal'), superAdminApplyAdjustment);
+
 router.post('/process-logs', authorize('Admin'), processAttendanceLogs); 
+
 router.get('/my-attendance', getMyAttendance);
 router.get('/my-summary', getMyAttendanceSummary);
 router.get('/irregular-days', getIrregularDays);

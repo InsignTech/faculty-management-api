@@ -143,6 +143,45 @@ const cancelLeaveRequest = async (req, res, next) => {
   }
 };
 
+const isPreviousMonth = (dateStr) => {
+    if (!dateStr) return false;
+    const targetDate = new Date(dateStr);
+    const currentDate = new Date();
+    
+    const targetYear = targetDate.getFullYear();
+    const targetMonth = targetDate.getMonth();
+    
+    const currentYear = currentDate.getFullYear();
+    const currentMonth = currentDate.getMonth();
+    
+    if (targetYear < currentYear) return true;
+    if (targetYear === currentYear && targetMonth < currentMonth) return true;
+    return false;
+};
+
+const superAdminApplyLeave = async (req, res, next) => {
+  try {
+    const { employee_id, start_date, end_date, confirmPreviousMonth } = req.body;
+    if (!employee_id || !start_date || !end_date) {
+      return res.status(400).json({ success: false, message: 'employee_id, start_date, and end_date are required' });
+    }
+
+    if ((isPreviousMonth(start_date) || isPreviousMonth(end_date)) && !confirmPreviousMonth) {
+      return res.status(200).json({
+        success: false,
+        warning: 'previous_month_warning',
+        message: 'Warning: One or more dates belong to a previous month. Salary calculation has already been processed for this period. Please confirm to proceed.'
+      });
+    }
+
+    const superAdminEmployeeId = req.user?.employeeId || req.user?.id || 1;
+    const result = await LeaveRequestModel.superAdminCreateLeave(req.body, superAdminEmployeeId);
+    sendResponse(res, 201, 'Leave applied and approved successfully', result);
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getLeaveRequests,
   createLeaveRequest,
@@ -150,5 +189,7 @@ module.exports = {
   updateRequestStatus,
   getEmployeeBalance,
   checkHolidays,
-  cancelLeaveRequest
+  cancelLeaveRequest,
+  superAdminApplyLeave
 };
+
