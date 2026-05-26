@@ -70,12 +70,18 @@ class EmployeeModel {
         `UPDATE employee SET 
           title = ?, gender = ?, dob = ?, marital_status = ?, nationality = ?, 
           blood_group = ?, place_of_birth = ?, state_of_birth = ?, religion = ?, 
-          identification_mark = ?, mother_tongue = ? 
+          identification_mark = ?, mother_tongue = ?,
+          educational_qualification = ?, additional_qualification = ?, 
+          present_address = ?, permanent_address = ?, 
+          contact_number = ?, alternative_contact_number = ?
          WHERE employee_id = ?`,
          [
            data.title || null, data.gender || null, data.dob || null, data.marital_status || null, data.nationality || null,
            data.blood_group || null, data.place_of_birth || null, data.state_of_birth || null, data.religion || null,
            data.identification_mark || null, data.mother_tongue || null,
+           data.educational_qualification || null, data.additional_qualification || null,
+           data.present_address || null, data.permanent_address || null,
+           data.contact_number || null, data.alternative_contact_number || null,
            employee.employee_id
          ]
       );
@@ -276,12 +282,18 @@ class EmployeeModel {
         marital_status = COALESCE(?, marital_status), nationality = COALESCE(?, nationality), 
         blood_group = COALESCE(?, blood_group), place_of_birth = COALESCE(?, place_of_birth), 
         state_of_birth = COALESCE(?, state_of_birth), religion = COALESCE(?, religion), 
-        identification_mark = COALESCE(?, identification_mark), mother_tongue = COALESCE(?, mother_tongue)
+        identification_mark = COALESCE(?, identification_mark), mother_tongue = COALESCE(?, mother_tongue),
+        educational_qualification = COALESCE(?, educational_qualification),
+        additional_qualification = COALESCE(?, additional_qualification),
+        present_address = COALESCE(?, present_address),
+        permanent_address = COALESCE(?, permanent_address),
+        contact_number = COALESCE(?, contact_number),
+        alternative_contact_number = COALESCE(?, alternative_contact_number)
        WHERE employee_id = ?`,
        [
          data.title !== undefined ? data.title : null, 
          data.gender !== undefined ? data.gender : null, 
-         data.dob !== undefined ? data.dob : null, 
+         data.dob !== undefined && data.dob !== '' ? data.dob : null, 
          data.marital_status !== undefined ? data.marital_status : null, 
          data.nationality !== undefined ? data.nationality : null,
          data.blood_group !== undefined ? data.blood_group : null, 
@@ -290,6 +302,12 @@ class EmployeeModel {
          data.religion !== undefined ? data.religion : null,
          data.identification_mark !== undefined ? data.identification_mark : null, 
          data.mother_tongue !== undefined ? data.mother_tongue : null,
+         data.educational_qualification !== undefined ? data.educational_qualification : null,
+         data.additional_qualification !== undefined ? data.additional_qualification : null,
+         data.present_address !== undefined ? data.present_address : null,
+         data.permanent_address !== undefined ? data.permanent_address : null,
+         data.contact_number !== undefined ? data.contact_number : null,
+         data.alternative_contact_number !== undefined ? data.alternative_contact_number : null,
          id
        ]
     );
