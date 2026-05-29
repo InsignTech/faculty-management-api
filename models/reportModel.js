@@ -155,13 +155,13 @@ class ReportModel {
                         status = 'Regularized';
                         remark = 'Regularized';
                     } 
-                    // Irregular (Late/Early)
-                    else if (dayAttendance.is_late === 1 || dayAttendance.is_early_leaving === 1) {
-                        status = 'Regularization Required';
-                    } 
                     // Incomplete punch
                     else if (!hasPunchIn || !hasPunchOut) {
                         status = 'Absent';
+                    } 
+                    // Irregular (Late/Early)
+                    else if (dayAttendance.is_late === 1 || dayAttendance.is_early_leaving === 1) {
+                        status = 'Regularization Required';
                     } 
                     // Normal Present
                     else {
