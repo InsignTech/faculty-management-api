@@ -43,6 +43,14 @@ class UserModel {
         );
         return result;
     }
+
+    static async updateLastLogin(userId) {
+        const [result] = await pool.execute(
+            'UPDATE user_accounts SET last_login_on = NOW() WHERE user_accounts_id = ?',
+            [userId]
+        );
+        return result;
+    }
 }
 
 module.exports = UserModel;
