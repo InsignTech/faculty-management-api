@@ -46,6 +46,9 @@ const login = async (req, res, next) => {
             return next(new ErrorResponse('Invalid credentials', 401, 'UNAUTHORIZED'));
         }
 
+        // Update last login timestamp
+        await UserModel.updateLastLogin(user.user_accounts_id);
+
         const token = jwt.sign(
             { id: user.user_accounts_id, role: user.role_name, roleId: user.role_id, employeeId: user.employee_id },
             process.env.JWT_SECRET || 'fallback_secret',
