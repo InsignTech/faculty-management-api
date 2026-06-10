@@ -139,7 +139,8 @@ const requestAdjustment = async (req, res, next) => {
             requested_in_time, requested_out_time, punch_time, 
             regularization_shift_type, 
             reason, remarks, 
-            attachment_path 
+            attachment_path,
+            substitute_employee_id
         } = req.body;
         
         // Validation: require type
@@ -165,7 +166,8 @@ const requestAdjustment = async (req, res, next) => {
             requested_out_time,
             regularization_shift_type,
             reason: reason || remarks, 
-            attachment_path 
+            attachment_path,
+            substitute_employee_id: substitute_employee_id || null
         });
         
         sendResponse(res, 201, 'Adjustment request submitted successfully', result);
@@ -185,26 +187,31 @@ const getMyAdjustments = async (req, res, next) => {
     } catch (error) { next(error); }
 };
 
+// @desc    Get approval queue for adjustments (supports status filter + pagination)
+// @route   GET /api/attendance/pending-adjustments
 const getPendingAdjustments = async (req, res, next) => {
     try {
         const userRole = req.user.role?.toLowerCase();
-        const isAdmin = ['admin', 'super_admin', 'principal'].includes(userRole);
+        const isAdmin = ['super_admin'].includes(userRole);
         const employeeId = req.user.employeeId;
 
         if (!employeeId) {
             return next(new ErrorResponse('User is not associated with an employee record', 400));
         }
 
-        let pending;
-        if (isAdmin) {
-            // Admins see everything
-            pending = await AttendanceModel.getPendingAdjustments();
-        } else {
-            // Managers see subordinates
-            pending = await AttendanceModel.getPendingSubordinateAdjustments(employeeId);
-        }
+        const status = req.query.status || 'Pending';
+        const page   = parseInt(req.query.page)  || 1;
+        const limit  = parseInt(req.query.limit) || 10;
 
-        sendResponse(res, 200, 'Pending adjustments fetched', pending);
+        const result = await AttendanceModel.getApprovalQueue({
+            isAdmin,
+            managerId: isAdmin ? null : employeeId,
+            status,
+            page,
+            limit
+        });
+
+        sendResponse(res, 200, 'Adjustment approval queue fetched', result);
     } catch (error) { next(error); }
 };
 
@@ -212,7 +219,8 @@ const approveAdjustment = async (req, res, next) => {
     try {
         const { id } = req.params;
         const approverId = req.user.employeeId;
-        const { remarks } = req.body;
+        const { remarks, substituteEmployeeId, substitute_employee_id } = req.body;
+        const subId = substituteEmployeeId || substitute_employee_id || null;
 
         if (!approverId) return next(new ErrorResponse('User is not associated with an employee record', 400));
 
@@ -222,16 +230,19 @@ const approveAdjustment = async (req, res, next) => {
 
         // Permission check
         const userRole = req.user.role?.toLowerCase();
-        const isAdmin = ['admin', 'super_admin', 'principal'].includes(userRole);
+        const isAdmin = ['super_admin'].includes(userRole);
         
         if (!isAdmin) {
-            const isSub = await EmployeeModel.isSubordinate(approverId, adj.employee_id);
-            if (!isSub) {
-                return next(new ErrorResponse('You are not authorized to approve this request', 403));
+            const isDesignatedApprover = adj.approver_1_id === approverId || adj.approver_2_id === approverId;
+            if (!isDesignatedApprover) {
+                const isSub = await EmployeeModel.isSubordinate(approverId, adj.employee_id);
+                if (!isSub) {
+                    return next(new ErrorResponse('You are not authorized to approve this request', 403));
+                }
             }
         }
 
-        const result = await AttendanceModel.approveAdjustment(id, approverId, remarks);
+        const result = await AttendanceModel.approveAdjustment(id, approverId, remarks, subId);
         sendResponse(res, 200, 'Adjustment approved', result);
     } catch (error) { next(error); }
 };
@@ -251,12 +262,15 @@ const rejectAdjustment = async (req, res, next) => {
 
         // Permission check
         const userRole = req.user.role?.toLowerCase();
-        const isAdmin = ['admin', 'super_admin', 'principal'].includes(userRole);
+        const isAdmin = ['super_admin'].includes(userRole);
         
         if (!isAdmin) {
-            const isSub = await EmployeeModel.isSubordinate(approverId, adj.employee_id);
-            if (!isSub) {
-                return next(new ErrorResponse('You are not authorized to reject this request', 403));
+            const isDesignatedApprover = adj.approver_1_id === approverId || adj.approver_2_id === approverId;
+            if (!isDesignatedApprover) {
+                const isSub = await EmployeeModel.isSubordinate(approverId, adj.employee_id);
+                if (!isSub) {
+                    return next(new ErrorResponse('You are not authorized to reject this request', 403));
+                }
             }
         }
 

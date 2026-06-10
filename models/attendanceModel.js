@@ -75,7 +75,8 @@ class AttendanceModel {
             employee_id, type, date, from_date, to_date, 
             requested_in_time, requested_out_time, 
             regularization_shift_type, 
-            reason, attachment_path 
+            reason, attachment_path,
+            substitute_employee_id
         } = data;
 
         // Verify employee is active
@@ -83,6 +84,26 @@ class AttendanceModel {
         if (!empRows.length || empRows[0].active === 0) {
             throw new Error('Adjustment requests can only be submitted for active employees.');
         }
+
+        // Resolve approver config from employee_approver_configs
+        const configType = type === 'Regularization' ? 'REGULARISATION' : 'ONDUTY';
+        const [configRows] = await pool.execute(
+            `SELECT
+                COALESCE(eac.approver_1_id, e.reporting_manager_id,
+                    (SELECT e2.employee_id FROM employee e2
+                     JOIN app_role r2 ON e2.role_id = r2.role_id
+                     WHERE r2.role IN ('Principal','principal') AND e2.active = 1 LIMIT 1)
+                ) AS approver_1_id,
+                eac.approver_2_id
+             FROM employee e
+             LEFT JOIN employee_approver_configs eac
+                 ON eac.employee_id = e.employee_id AND eac.request_type = ?
+             WHERE e.employee_id = ?`,
+            [configType, employee_id]
+        );
+
+        const approver1 = configRows[0]?.approver_1_id || null;
+        const approver2 = configRows[0]?.approver_2_id || null;
 
         // Handle Date Range for On-Duty
         if (type === 'OnDuty' && from_date && to_date && from_date !== to_date) {
@@ -126,9 +147,9 @@ class AttendanceModel {
                     // 3. Insert
                     await conn.execute(
                         `INSERT INTO attendance_regularization 
-                        (employee_id, request_type, date, requested_in_time, requested_out_time, regularization_shift_type, reason, status, created_on) 
-                        VALUES (?, ?, ?, ?, ?, ?, ?, 'Pending', NOW())`,
-                        [employee_id, type, d, requested_in_time || null, requested_out_time || null, regularization_shift_type || 'FullDay', reason]
+                        (employee_id, request_type, date, requested_in_time, requested_out_time, regularization_shift_type, reason, status, created_on, substitute_employee_id, approver_1_id, approver_2_id) 
+                        VALUES (?, ?, ?, ?, ?, ?, ?, 'Pending', NOW(), ?, ?, ?)`,
+                        [employee_id, type, d, requested_in_time || null, requested_out_time || null, regularization_shift_type || 'FullDay', reason, substitute_employee_id || null, approver1, approver2]
                     );
                 }
 
@@ -234,16 +255,16 @@ class AttendanceModel {
 
         const [result] = await pool.execute(
             `INSERT INTO attendance_regularization 
-            (employee_id, request_type, date, requested_in_time, requested_out_time, regularization_shift_type, reason, status, created_on) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'Pending', NOW())`,
-            [employee_id, type, targetDate, requested_in_time || null, requested_out_time || null, regularization_shift_type || 'FullDay', reason]
+            (employee_id, request_type, date, requested_in_time, requested_out_time, regularization_shift_type, reason, status, created_on, substitute_employee_id, approver_1_id, approver_2_id) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'Pending', NOW(), ?, ?, ?)`,
+            [employee_id, type, targetDate, requested_in_time || null, requested_out_time || null, regularization_shift_type || 'FullDay', reason, substitute_employee_id || null, approver1, approver2]
         );
 
         return { adjustment_id: result.insertId };
     }
 
     // Approve an adjustment and trigger deduction recalculation
-    static async approveAdjustment(adjustmentId, approverId, remarks) {
+    static async approveAdjustment(adjustmentId, approverId, remarks, substituteEmployeeId = null) {
         const conn = await pool.getConnection();
         try {
             await conn.beginTransaction();
@@ -255,41 +276,96 @@ class AttendanceModel {
             if (!adjRows.length) throw new Error('Adjustment not found');
 
             const adj = adjRows[0];
+            if (adj.status !== 'Pending') {
+                throw new Error('Only Pending requests can be approved');
+            }
+
             const v_month = new Date(adj.date).getMonth() + 1;
             const v_year = new Date(adj.date).getFullYear();
 
-            // 2. Check for overlapping approved states in attendance_daily
-            const [overlapCheck] = await conn.execute(
-                `SELECT leave_shift_type, regularization_shift_type, onduty_shift_type FROM attendance_daily 
-                 WHERE employee_id = ? AND date = ?`,
-                [adj.employee_id, adj.date]
-            );
+            const currentLevel = adj.current_level || 1;
+
+            // Check designated active level approver
+            const expectedApproverId = (currentLevel === 1) ? adj.approver_1_id : adj.approver_2_id;
+            if (approverId !== expectedApproverId) {
+                const [roleRows] = await conn.execute(
+                    `SELECT r.role FROM employee e 
+                     JOIN app_role r ON e.role_id = r.role_id 
+                     WHERE e.employee_id = ? AND e.active = 1`,
+                    [approverId]
+                );
+                const role = roleRows[0]?.role?.toLowerCase();
+                const isAdminOverride = ['super_admin'].includes(role);
+                if (!isAdminOverride) {
+                    throw new Error(`You are not the designated Level ${currentLevel} approver for this request.`);
+                }
+            }
+
+            // 2. Check for overlapping approved states in attendance_daily (only on final approval)
+            const isFinalApproval = !(currentLevel === 1 && adj.approver_2_id);
 
             const requestedShift = adj.regularization_shift_type || 'FullDay';
 
-            if (overlapCheck.length > 0) {
-                const row = overlapCheck[0];
-                const activeShifts = [
-                    { type: 'Leave', shift: row.leave_shift_type },
-                    { type: 'Regularization', shift: row.regularization_shift_type },
-                    { type: 'On-Duty', shift: row.onduty_shift_type }
-                ].filter(s => s.shift !== null);
+            if (isFinalApproval) {
+                const [overlapCheck] = await conn.execute(
+                    `SELECT leave_shift_type, regularization_shift_type, onduty_shift_type FROM attendance_daily 
+                     WHERE employee_id = ? AND date = ?`,
+                    [adj.employee_id, adj.date]
+                );
 
-                for (const s of activeShifts) {
-                    if (s.shift === 'FullDay' || requestedShift === 'FullDay' || s.shift === requestedShift) {
-                        throw new Error(`Approval Error: This shift is already covered by an approved ${s.type} (${s.shift}).`);
+                if (overlapCheck.length > 0) {
+                    const row = overlapCheck[0];
+                    const activeShifts = [
+                        { type: 'Leave', shift: row.leave_shift_type },
+                        { type: 'Regularization', shift: row.regularization_shift_type },
+                        { type: 'On-Duty', shift: row.onduty_shift_type }
+                    ].filter(s => s.shift !== null);
+
+                    for (const s of activeShifts) {
+                        if (s.shift === 'FullDay' || requestedShift === 'FullDay' || s.shift === requestedShift) {
+                            throw new Error(`Approval Error: This shift is already covered by an approved ${s.type} (${s.shift}).`);
+                        }
                     }
                 }
             }
 
-            // 3. Update request status
-            await conn.execute(
-                `UPDATE attendance_regularization 
-                 SET status = 'Approved', approved_by = ?, approved_on = NOW(), 
-                     reason = CONCAT(COALESCE(reason, ''), ' | Final Approval: ', ?)
-                 WHERE id = ?`,
-                [approverId, remarks || '', adjustmentId]
-            );
+            // 3. Update request status / level
+            if (currentLevel === 1 && adj.approver_2_id) {
+                // Level 1 Approval only - Advance to Level 2
+                await conn.execute(
+                    `UPDATE attendance_regularization 
+                     SET approver_1_remarks = ?, approver_1_action_on = NOW(), 
+                         current_level = 2,
+                         substitute_employee_id = COALESCE(?, substitute_employee_id)
+                     WHERE id = ?`,
+                    [remarks || '', substituteEmployeeId || null, adjustmentId]
+                );
+                await conn.commit();
+                return { success: true, message: 'Level 1 approved, pending Level 2.' };
+            } else {
+                // Final Approval (either level 2, or level 1 with no level 2 configured)
+                if (currentLevel === 1) {
+                    await conn.execute(
+                        `UPDATE attendance_regularization 
+                         SET status = 'Approved', approved_by = ?, approved_on = NOW(), 
+                             approver_1_remarks = ?, approver_1_action_on = NOW(),
+                             reason = CONCAT(COALESCE(reason, ''), ' | Final Approval: ', ?),
+                             substitute_employee_id = COALESCE(?, substitute_employee_id)
+                         WHERE id = ?`,
+                        [approverId, remarks || '', remarks || '', substituteEmployeeId || null, adjustmentId]
+                    );
+                } else {
+                    await conn.execute(
+                        `UPDATE attendance_regularization 
+                         SET status = 'Approved', approved_by = ?, approved_on = NOW(), 
+                             approver_2_remarks = ?, approver_2_action_on = NOW(),
+                             reason = CONCAT(COALESCE(reason, ''), ' | Final Approval: ', ?),
+                             substitute_employee_id = COALESCE(?, substitute_employee_id)
+                         WHERE id = ?`,
+                        [approverId, remarks || '', remarks || '', substituteEmployeeId || null, adjustmentId]
+                    );
+                }
+            }
 
             // 4. Fetch current attendance state for smart merge
             const [attendanceRows] = await conn.execute(
@@ -400,12 +476,49 @@ class AttendanceModel {
 
     // Reject an adjustment
     static async rejectAdjustment(adjustmentId, approverId, remarks) {
-        const [rows] = await pool.execute(
-            `UPDATE attendance_regularization 
-             SET status = 'Rejected', approved_by = ?, approved_on = NOW(), reason = ?
-             WHERE id = ?`,
-            [approverId, remarks || '', adjustmentId]
+        // Load the adjustment to check current level
+        const [adjRows] = await pool.execute(
+            'SELECT current_level, approver_1_id, approver_2_id FROM attendance_regularization WHERE id = ?',
+            [adjustmentId]
         );
+        if (!adjRows.length) throw new Error('Adjustment not found');
+        const adj = adjRows[0];
+        const currentLevel = adj.current_level || 1;
+
+        // Check designated active level approver
+        const expectedApproverId = (currentLevel === 1) ? adj.approver_1_id : adj.approver_2_id;
+        if (approverId !== expectedApproverId) {
+            const [roleRows] = await pool.execute(
+                `SELECT r.role FROM employee e 
+                 JOIN app_role r ON e.role_id = r.role_id 
+                 WHERE e.employee_id = ? AND e.active = 1`,
+                [approverId]
+            );
+            const role = roleRows[0]?.role?.toLowerCase();
+            const isAdminOverride = ['super_admin'].includes(role);
+            if (!isAdminOverride) {
+                throw new Error(`You are not the designated Level ${currentLevel} approver for this request.`);
+            }
+        }
+
+        let query = '';
+        let params = [];
+
+        if (currentLevel === 1) {
+            query = `UPDATE attendance_regularization 
+                     SET status = 'Rejected', approved_by = ?, approved_on = NOW(),
+                         approver_1_remarks = ?, approver_1_action_on = NOW()
+                     WHERE id = ?`;
+            params = [approverId, remarks || '', adjustmentId];
+        } else {
+            query = `UPDATE attendance_regularization 
+                     SET status = 'Rejected', approved_by = ?, approved_on = NOW(),
+                         approver_2_remarks = ?, approver_2_action_on = NOW()
+                     WHERE id = ?`;
+            params = [approverId, remarks || '', adjustmentId];
+        }
+
+        const [rows] = await pool.execute(query, params);
         return { affected_rows: rows.affectedRows };
     }
 
@@ -422,9 +535,22 @@ class AttendanceModel {
     // Get adjustment history for an employee with filters
     static async getEmployeeAdjustments(employeeId, month = null, year = null) {
         let query = `
-            SELECT aj.*, e.employee_name as approver_name 
+            SELECT aj.*, e.employee_name as approver_name,
+                   ea1.employee_name AS approver_1_name,
+                   ea1.employee_code AS approver_1_code,
+                   ea2.employee_name AS approver_2_name,
+                   ea2.employee_code AS approver_2_code,
+                   ad.first_in_time AS actual_in_time,
+                   ad.last_out_time AS actual_out_time,
+                   ad.status AS actual_status,
+                   sub.employee_name AS substitute_name,
+                   sub.employee_code AS substitute_code
             FROM attendance_regularization aj 
             LEFT JOIN employee e ON aj.approved_by = e.employee_id 
+            LEFT JOIN employee ea1 ON ea1.employee_id = aj.approver_1_id
+            LEFT JOIN employee ea2 ON ea2.employee_id = aj.approver_2_id
+            LEFT JOIN employee sub ON sub.employee_id = aj.substitute_employee_id
+            LEFT JOIN attendance_daily ad ON ad.employee_id = aj.employee_id AND ad.date = aj.date
             WHERE aj.employee_id = ?
         `;
         const params = [employeeId];
@@ -453,19 +579,21 @@ class AttendanceModel {
         return rows;
     }
 
-    // Admin: Get all pending adjustments
+    // Admin: Get all pending adjustments (legacy — kept for compatibility)
     static async getPendingAdjustments() {
         const [rows] = await pool.query(`
-            SELECT aj.*, e.employee_name, e.employee_code 
+            SELECT aj.*, e.employee_name, e.employee_code,
+                   ap.employee_name AS approver_name
             FROM attendance_regularization aj 
-            JOIN employee e ON aj.employee_id = e.employee_id 
+            JOIN employee e ON aj.employee_id = e.employee_id
+            LEFT JOIN employee ap ON ap.employee_id = aj.approved_by
             WHERE aj.status = 'Pending' 
             ORDER BY aj.created_on ASC
         `);
         return rows;
     }
 
-    // Manager/HOD: Get pending adjustments for all subordinates
+    // Manager/HOD: Get pending adjustments for all subordinates (legacy)
     static async getPendingSubordinateAdjustments(managerId) {
         const query = `
             WITH RECURSIVE subordinates AS (
@@ -477,15 +605,126 @@ class AttendanceModel {
                 FROM employee e
                 INNER JOIN subordinates s ON e.reporting_manager_id = s.employee_id
             )
-            SELECT aj.*, e.employee_name, e.employee_code 
+            SELECT aj.*, e.employee_name, e.employee_code,
+                   ap.employee_name AS approver_name
             FROM attendance_regularization aj 
-            JOIN employee e ON aj.employee_id = e.employee_id 
+            JOIN employee e ON aj.employee_id = e.employee_id
+            LEFT JOIN employee ap ON ap.employee_id = aj.approved_by
             WHERE aj.employee_id IN (SELECT employee_id FROM subordinates)
               AND aj.status = 'Pending'
             ORDER BY aj.created_on ASC
         `;
         const [rows] = await pool.execute(query, [managerId]);
         return rows;
+    }
+
+    /**
+     * Paginated approval queue — supports status filter.
+     * isAdmin = true  → all records
+     * isAdmin = false → manager sees own subordinate records
+     */
+    static async getApprovalQueue({ isAdmin, managerId, status = 'Pending', page = 1, limit = 10 }) {
+        const offset = (page - 1) * limit;
+        const statusFilter = (status && status !== 'All') ? status : null;
+
+        let dataQuery, countQuery, params = [], countParams = [];
+
+        if (isAdmin) {
+            dataQuery = `
+                SELECT aj.*, e.employee_name, e.employee_code,
+                       d.departmentname AS department_name,
+                       des.designation AS employee_designation,
+                       ap.employee_name AS approver_name,
+                       ea1.employee_name AS approver_1_name,
+                       ea1.employee_code AS approver_1_code,
+                       ea2.employee_name AS approver_2_name,
+                       ea2.employee_code AS approver_2_code,
+                       ad.first_in_time AS actual_in_time,
+                       ad.last_out_time AS actual_out_time,
+                       ad.status AS actual_status,
+                       sub.employee_name AS substitute_name,
+                       sub.employee_code AS substitute_code
+                FROM attendance_regularization aj
+                JOIN employee e ON aj.employee_id = e.employee_id
+                LEFT JOIN department d ON e.department_id = d.department_id
+                LEFT JOIN designation des ON e.designation_id = des.designation_id
+                LEFT JOIN employee ap  ON ap.employee_id  = aj.approved_by
+                LEFT JOIN employee ea1 ON ea1.employee_id = aj.approver_1_id
+                LEFT JOIN employee ea2 ON ea2.employee_id = aj.approver_2_id
+                LEFT JOIN employee sub ON sub.employee_id = aj.substitute_employee_id
+                LEFT JOIN attendance_daily ad ON ad.employee_id = aj.employee_id AND ad.date = aj.date
+                WHERE 1=1
+                ${statusFilter ? 'AND aj.status = ?' : ""}
+                ORDER BY aj.created_on DESC
+                LIMIT ? OFFSET ?`;
+            countQuery = `
+                SELECT COUNT(*) AS total FROM attendance_regularization aj
+                WHERE 1=1 ${statusFilter ? 'AND aj.status = ?' : ''}`;
+            if (statusFilter) { params.push(statusFilter); countParams.push(statusFilter); }
+            params.push(parseInt(limit), parseInt(offset));
+        } else {
+            const approverConditions = (statusFilter === 'Pending')
+                ? `OR (aj.current_level = 1 AND aj.approver_1_id = ?)
+                   OR (aj.current_level = 2 AND aj.approver_2_id = ?)`
+                : `OR aj.approver_1_id = ?
+                   OR aj.approver_2_id = ?`;
+ 
+            dataQuery = `
+                WITH RECURSIVE subordinates AS (
+                    SELECT employee_id FROM employee WHERE reporting_manager_id = ?
+                    UNION ALL
+                    SELECT e.employee_id FROM employee e
+                    INNER JOIN subordinates s ON e.reporting_manager_id = s.employee_id
+                )
+                SELECT aj.*, e.employee_name, e.employee_code,
+                       d.departmentname AS department_name,
+                       des.designation AS employee_designation,
+                       ap.employee_name AS approver_name,
+                       ea1.employee_name AS approver_1_name,
+                       ea1.employee_code AS approver_1_code,
+                       ea2.employee_name AS approver_2_name,
+                       ea2.employee_code AS approver_2_code,
+                       ad.first_in_time AS actual_in_time,
+                       ad.last_out_time AS actual_out_time,
+                       ad.status AS actual_status,
+                       sub.employee_name AS substitute_name,
+                       sub.employee_code AS substitute_code
+                FROM attendance_regularization aj
+                JOIN employee e ON aj.employee_id = e.employee_id
+                LEFT JOIN department d ON e.department_id = d.department_id
+                LEFT JOIN designation des ON e.designation_id = des.designation_id
+                LEFT JOIN employee ap  ON ap.employee_id  = aj.approved_by
+                LEFT JOIN employee ea1 ON ea1.employee_id = aj.approver_1_id
+                LEFT JOIN employee ea2 ON ea2.employee_id = aj.approver_2_id
+                LEFT JOIN employee sub ON sub.employee_id = aj.substitute_employee_id
+                LEFT JOIN attendance_daily ad ON ad.employee_id = aj.employee_id AND ad.date = aj.date
+                WHERE (aj.employee_id IN (SELECT employee_id FROM subordinates)
+                   ${approverConditions})
+                ${statusFilter ? 'AND aj.status = ?' : ''}
+                ORDER BY aj.created_on DESC
+                LIMIT ? OFFSET ?`;
+
+            countQuery = `
+                WITH RECURSIVE subordinates AS (
+                    SELECT employee_id FROM employee WHERE reporting_manager_id = ?
+                    UNION ALL
+                    SELECT e.employee_id FROM employee e
+                    INNER JOIN subordinates s ON e.reporting_manager_id = s.employee_id
+                )
+                SELECT COUNT(*) AS total FROM attendance_regularization aj
+                WHERE (aj.employee_id IN (SELECT employee_id FROM subordinates)
+                   ${approverConditions})
+                ${statusFilter ? 'AND aj.status = ?' : ''}`;
+
+            params.push(managerId, managerId, managerId);
+            countParams.push(managerId, managerId, managerId);
+            if (statusFilter) { params.push(statusFilter); countParams.push(statusFilter); }
+            params.push(parseInt(limit), parseInt(offset));
+        }
+
+        const [rows] = await pool.query(dataQuery, params);
+        const [countRows] = await pool.query(countQuery, countParams);
+        return { adjustments: rows, total: countRows[0]?.total || 0 };
     }
 
     // --- Machine Log Sync Methods ---

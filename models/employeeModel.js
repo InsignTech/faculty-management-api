@@ -68,6 +68,20 @@ class EmployeeModel {
         );
       }
 
+      // Insert default employee approver configs
+      if (employee && employee.employee_id) {
+        const defaultApproverId = reportingManagerId || employee.employee_id;
+        const requestTypes = ['LEAVE', 'REGULARISATION', 'ONDUTY'];
+        for (const type of requestTypes) {
+          await conn.execute(
+            `INSERT INTO employee_approver_configs (employee_id, request_type, approver_1_id, approver_2_id)
+             VALUES (?, ?, ?, NULL)
+             ON DUPLICATE KEY UPDATE approver_1_id = VALUES(approver_1_id)`,
+            [employee.employee_id, type, defaultApproverId]
+          );
+        }
+      }
+
       
       // Update personal details
       await conn.query(
@@ -136,6 +150,43 @@ class EmployeeModel {
       LIMIT ? OFFSET ?
     `;
     const [rows] = await pool.execute(query, [limit.toString(), offset.toString()]);
+    return rows;
+  }
+
+  /**
+   * Global substitute search — returns any active employee except the requester.
+   * No team/manager scoping. Used for leave & on-duty substitute selection.
+   */
+  static async searchSubstitutes(searchTerm = '', excludeEmployeeId = 0, limit = 10) {
+    const term = searchTerm.trim();
+    if (!term) return [];
+
+    const query = `
+      SELECT
+          e.employee_id,
+          e.employee_name,
+          e.employee_code,
+          d.departmentname,
+          des.designation AS designation_name,
+          r.role AS role_name
+      FROM employee e
+      LEFT JOIN department d ON e.department_id = d.department_id
+      LEFT JOIN designation des ON e.designation_id = des.designation_id
+      LEFT JOIN app_role r ON e.role_id = r.role_id
+      WHERE e.active = 1
+        AND e.employee_id != ?
+        AND (e.employee_name LIKE ? OR e.employee_code LIKE ?)
+      ORDER BY e.employee_name ASC
+      LIMIT ?
+    `;
+
+    const likeTerm = `%${term}%`;
+    const [rows] = await pool.query(query, [
+      parseInt(excludeEmployeeId) || 0,
+      likeTerm,
+      likeTerm,
+      parseInt(limit) || 10
+    ]);
     return rows;
   }
 

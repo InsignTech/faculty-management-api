@@ -260,6 +260,22 @@ const uploadDocument = async (req, res, next) => {
   }
 };
 
+const searchSubstitutes = async (req, res, next) => {
+  try {
+    const { search, limit = 10 } = req.query;
+    const excludeEmployeeId = req.user.employeeId || 0;
+
+    if (!search || !search.trim()) {
+      return sendResponse(res, 200, 'No query provided', []);
+    }
+
+    const employees = await EmployeeModel.searchSubstitutes(search.trim(), excludeEmployeeId, parseInt(limit));
+    sendResponse(res, 200, 'Substitute employees fetched', employees);
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   uploadDocument,
   createEmployee,
@@ -272,4 +288,5 @@ module.exports = {
   updateReportingManager,
   getSubordinates,
   updateProfilePicture,
+  searchSubstitutes,
 };
