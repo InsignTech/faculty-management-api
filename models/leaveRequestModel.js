@@ -4,9 +4,15 @@ const LeavePolicyModel = require('./leavePolicyModel');
 class LeaveRequestModel {
   static async getAll(filters = {}) {
     let sql = `
-      SELECT lr.*, e.employee_name, e.employee_code as emp_code
+      SELECT lr.*, e.employee_name, e.employee_code as emp_code,
+             a1.employee_name AS approver_1_name,
+             a2.employee_name AS approver_2_name,
+             sub.employee_name AS substitute_name
       FROM leave_requests lr
       JOIN employee e ON lr.employee_id = e.employee_id
+      LEFT JOIN employee a1 ON a1.employee_id = lr.approver_1_id
+      LEFT JOIN employee a2 ON a2.employee_id = lr.approver_2_id
+      LEFT JOIN employee sub ON sub.employee_id = lr.substitute_employee_id
       WHERE 1=1
     `;
     const params = [];
@@ -28,18 +34,26 @@ class LeaveRequestModel {
 
   static async getForSuperior(superiorId) {
     const sql = `
-      SELECT lr.*, e.employee_name, e.employee_code as emp_code
+      SELECT lr.*, e.employee_name, e.employee_code as emp_code,
+             a1.employee_name AS approver_1_name,
+             a2.employee_name AS approver_2_name,
+             sub.employee_name AS substitute_name
       FROM leave_requests lr
       JOIN employee e ON lr.employee_id = e.employee_id
+      LEFT JOIN employee a1 ON a1.employee_id = lr.approver_1_id
+      LEFT JOIN employee a2 ON a2.employee_id = lr.approver_2_id
+      LEFT JOIN employee sub ON sub.employee_id = lr.substitute_employee_id
       WHERE e.reporting_manager_id = ?
+         OR lr.approver_1_id = ?
+         OR lr.approver_2_id = ?
       ORDER BY lr.applied_on DESC
     `;
-    const [rows] = await pool.execute(sql, [superiorId]);
+    const [rows] = await pool.execute(sql, [superiorId, superiorId, superiorId]);
     return rows;
   }
 
   static create = async (data) => {
-    const { employee_id, leave_type, start_date, end_date, leave_half_type, reason, attachment_path, total_days } = data;
+    const { employee_id, leave_type, start_date, end_date, leave_half_type, reason, attachment_path, total_days, substitute_employee_id } = data;
     
     const halfType = leave_half_type || 'FullDay';
     const requestedDays = halfType !== 'FullDay' ? 0.5 : (total_days || 0);
@@ -100,10 +114,40 @@ class LeaveRequestModel {
         if (isAdjConflict) throw new Error('Leave request overlaps with an approved regularization or on-duty shift.');
       }
 
+      // Resolve approver config from employee_approver_configs
+      const [configRows] = await conn.execute(
+        `SELECT
+            COALESCE(eac.approver_1_id, e.reporting_manager_id,
+                (SELECT e2.employee_id FROM employee e2
+                 JOIN app_role r2 ON e2.role_id = r2.role_id
+                 WHERE r2.role IN ('Principal','principal') AND e2.active = 1 LIMIT 1)
+            ) AS approver_1_id,
+            eac.approver_2_id
+         FROM employee e
+         LEFT JOIN employee_approver_configs eac
+             ON eac.employee_id = e.employee_id AND eac.request_type = 'LEAVE'
+         WHERE e.employee_id = ?`,
+        [employee_id]
+      );
+
+      const approver1 = configRows[0]?.approver_1_id || null;
+      const approver2 = configRows[0]?.approver_2_id || null;
+
       // 3. Call SP to apply leave
       const [rows] = await conn.execute(
-        'CALL sp_apply_leave(?, ?, ?, ?, ?, ?, ?)',
-        [employee_id, leave_type, start_date, end_date, halfType, reason, attachment_path || null]
+        'CALL sp_apply_leave(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [
+          employee_id,
+          leave_type,
+          start_date,
+          end_date,
+          requestedDays,
+          reason,
+          attachment_path || null,
+          substitute_employee_id || null,
+          approver1,
+          approver2
+        ]
       );
       
       const result = rows[0][0];

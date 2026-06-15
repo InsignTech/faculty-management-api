@@ -11,6 +11,7 @@ const {
   getSubordinates,
   updateProfilePicture,
   uploadDocument,
+  searchSubstitutes,
 } = require('../controllers/employeeController');
 const { protect, authorize } = require('../middleware/auth');
 const multer = require('multer');
@@ -25,6 +26,7 @@ router.post('/', authorize('Admin', 'admin', 'principal', 'super_admin'), create
 
 router.get('/potential-managers', authorize('Admin', 'admin', 'principal', 'super_admin', 'HOD', 'hod'), getPotentialManagers);
 router.get('/subordinates', authorize('Admin', 'admin', 'principal', 'super_admin', 'HOD', 'hod'), getSubordinates);
+router.get('/search-substitute', searchSubstitutes); // Global search for any employee (used in substitute picker)
 
 router.get('/me', getMe);
 router.post('/profile-picture', upload.single('profile_picture'), updateProfilePicture);

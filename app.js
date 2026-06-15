@@ -19,6 +19,7 @@ const exceptionalRoutes = require('./routes/exceptionalRoutes');
 const leaveRoutes = require('./routes/leaveRoutes');
 const leaveEncashmentRoutes = require('./routes/leaveEncashmentRoutes');
 const shiftRoutes = require('./routes/shiftRoutes');
+const approverConfigRoutes = require('./routes/approverConfigRoutes');
 const setupSwagger = require('./utils/swagger');
 const debugLog = require('./utils/debugLogger');
 
@@ -65,6 +66,7 @@ app.use('/api/exceptional', exceptionalRoutes);
 app.use('/api/leaves', leaveRoutes);
 app.use('/api/leave-encashments', leaveEncashmentRoutes);
 app.use('/api/shifts', shiftRoutes);
+app.use('/api/approver-config', approverConfigRoutes);
 
 // 404 handler for undefined routes
 app.use((req, res, next) => {
