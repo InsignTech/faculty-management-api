@@ -466,6 +466,61 @@ class EmployeeModel {
     const [rows] = await pool.execute(query, [managerId, targetId]);
     return rows[0].count > 0;
   }
+
+  static async getAvailableSubstitutes(dateStr, search = '', limit = 20, offset = 0) {
+    if (!dateStr) return { employees: [], total: 0 };
+
+    let searchFilter = '';
+    const params = [dateStr];
+
+    if (search && search.trim()) {
+      searchFilter = ' AND (e.employee_name LIKE ? OR e.employee_code LIKE ?)';
+      params.push(`%${search.trim()}%`, `%${search.trim()}%`);
+    }
+
+    const query = `
+      SELECT 
+          e.employee_id,
+          e.employee_name,
+          e.employee_code,
+          d.departmentname,
+          des.designation AS designation_name,
+          r.role AS role_name
+      FROM employee e
+      LEFT JOIN department d ON e.department_id = d.department_id
+      LEFT JOIN designation des ON e.designation_id = des.designation_id
+      LEFT JOIN app_role r ON e.role_id = r.role_id
+      WHERE e.active = 1
+        AND e.employee_id NOT IN (
+            SELECT employee_id FROM leave_requests
+            WHERE status = 'Approved'
+              AND ? BETWEEN start_date AND end_date
+        )
+        ${searchFilter}
+      ORDER BY e.employee_name ASC
+      LIMIT ? OFFSET ?
+    `;
+
+    const countQuery = `
+      SELECT COUNT(*) as total
+      FROM employee e
+      WHERE e.active = 1
+        AND e.employee_id NOT IN (
+            SELECT employee_id FROM leave_requests
+            WHERE status = 'Approved'
+              AND ? BETWEEN start_date AND end_date
+        )
+        ${searchFilter}
+    `;
+
+    const [countRows] = await pool.query(countQuery, params);
+    const total = countRows[0].total;
+
+    const queryParams = [...params, parseInt(limit) || 20, parseInt(offset) || 0];
+    const [rows] = await pool.query(query, queryParams);
+
+    return { employees: rows, total };
+  }
 }
 
 module.exports = EmployeeModel;
