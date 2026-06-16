@@ -182,6 +182,32 @@ const superAdminApplyLeave = async (req, res, next) => {
   }
 };
 
+const getApprovedSubstitutesList = async (req, res, next) => {
+  try {
+    const { date, page = 1, limit = 10 } = req.query;
+    const offset = (page - 1) * limit;
+
+    const filters = {};
+    if (date) {
+      filters.date = date;
+    }
+
+    const { rows: leaves, total } = await LeaveRequestModel.getApprovedWithSubstitutes(filters, parseInt(limit), parseInt(offset));
+
+    sendResponse(res, 200, 'Approved substitute leaves fetched successfully', {
+      leaves,
+      pagination: {
+        total,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        totalPages: Math.ceil(total / limit)
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getLeaveRequests,
   createLeaveRequest,
@@ -190,6 +216,7 @@ module.exports = {
   getEmployeeBalance,
   checkHolidays,
   cancelLeaveRequest,
-  superAdminApplyLeave
+  superAdminApplyLeave,
+  getApprovedSubstitutesList
 };
 

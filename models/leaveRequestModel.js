@@ -330,6 +330,38 @@ class LeaveRequestModel {
       conn.release();
     }
   }
+
+  static async getApprovedWithSubstitutes(filters = {}, limit = 10, offset = 0) {
+    let sql = `
+      SELECT lr.*, e.employee_name, e.employee_code as emp_code,
+             sub.employee_name AS substitute_name, sub.employee_code AS substitute_code
+      FROM leave_requests lr
+      JOIN employee e ON lr.employee_id = e.employee_id
+      LEFT JOIN employee sub ON sub.employee_id = lr.substitute_employee_id
+      WHERE lr.status = 'Approved'
+        AND lr.substitute_employee_id IS NOT NULL
+        AND lr.substitute_employee_id > 0
+    `;
+    const params = [];
+
+    if (filters.date) {
+      sql += ' AND ? BETWEEN lr.start_date AND lr.end_date';
+      params.push(filters.date);
+    }
+
+    sql += ' ORDER BY lr.applied_on DESC';
+
+    // Get total count for pagination
+    let countSql = `SELECT COUNT(*) as total FROM (${sql}) as temp`;
+    const [countRows] = await pool.execute(countSql, params);
+    const total = countRows[0].total;
+
+    sql += ' LIMIT ? OFFSET ?';
+    params.push(limit.toString(), offset.toString());
+
+    const [rows] = await pool.execute(sql, params);
+    return { rows, total };
+  }
 }
 
 module.exports = LeaveRequestModel;

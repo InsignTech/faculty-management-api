@@ -276,6 +276,30 @@ const searchSubstitutes = async (req, res, next) => {
   }
 };
 
+const getAvailableSubstitutes = async (req, res, next) => {
+  try {
+    const { date, search = '', page = 1, limit = 20 } = req.query;
+    if (!date) {
+      return sendResponse(res, 200, 'No date provided', { employees: [], pagination: { total: 0, page: 1, limit: 20, totalPages: 0 } });
+    }
+
+    const offset = (page - 1) * limit;
+    const { employees, total } = await EmployeeModel.getAvailableSubstitutes(date, search, parseInt(limit), parseInt(offset));
+
+    sendResponse(res, 200, 'Available substitutes fetched successfully', {
+      employees,
+      pagination: {
+        total,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        totalPages: Math.ceil(total / limit)
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   uploadDocument,
   createEmployee,
@@ -289,4 +313,5 @@ module.exports = {
   getSubordinates,
   updateProfilePicture,
   searchSubstitutes,
+  getAvailableSubstitutes,
 };

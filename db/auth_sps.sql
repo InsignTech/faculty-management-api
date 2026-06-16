@@ -14,13 +14,13 @@ BEGIN
         ua.user_display_name, 
         ua.user_password, 
         ua.email, 
-        ua.role_id, 
+        COALESCE(e.role_id, ua.role_id) AS role_id, 
         ua.employee_id, 
         ua.active AS user_active,
         r.role AS role_name
     FROM user_accounts ua
-    LEFT JOIN app_role r ON ua.role_id = r.role_id
     LEFT JOIN employee e ON ua.employee_id = e.employee_id
+    LEFT JOIN app_role r ON r.role_id = COALESCE(e.role_id, ua.role_id)
     WHERE ua.email = p_email 
       AND ua.active = 1 
       AND (ua.employee_id IS NULL OR e.active = 1);
