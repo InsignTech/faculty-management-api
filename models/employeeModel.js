@@ -347,7 +347,7 @@ class EmployeeModel {
        WHERE employee_id = ?`,
        [
          data.title !== undefined ? data.title : null, 
-         data.gender !== undefined ? data.gender : null, 
+         data.gender !== undefined && data.gender !== '' ? data.gender : null, 
          data.dob !== undefined && data.dob !== '' ? data.dob : null, 
          data.marital_status !== undefined ? data.marital_status : null, 
          data.nationality !== undefined ? data.nationality : null,
