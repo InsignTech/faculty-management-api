@@ -71,10 +71,10 @@ class AttendanceModel {
 
     // Request an adjustment (Regularization / On-Duty)
     static async requestAdjustment(data) {
-        const { 
-            employee_id, type, date, from_date, to_date, 
-            requested_in_time, requested_out_time, 
-            regularization_shift_type, 
+        const {
+            employee_id, type, date, from_date, to_date,
+            requested_in_time, requested_out_time,
+            regularization_shift_type,
             reason, attachment_path,
             substitute_employee_id
         } = data;
@@ -209,7 +209,7 @@ class AttendanceModel {
 
         if (attendanceRows.length > 0) {
             const row = attendanceRows[0];
-            
+
             // Validation for Regularization
             if (type === 'Regularization') {
                 if (new Date(targetDate) > new Date()) {
@@ -217,7 +217,7 @@ class AttendanceModel {
                 }
 
                 // Check if already completely regularized/covered in attendance_daily
-                if (row.regularization_shift_type === 'FullDay' || 
+                if (row.regularization_shift_type === 'FullDay' ||
                     (requestedShift !== 'FullDay' && row.regularization_shift_type === requestedShift)) {
                     throw new Error(`This ${requestedShift} shift is already regularized.`);
                 }
@@ -403,15 +403,15 @@ class AttendanceModel {
 
                 // Deduction calculation
                 let deduction = (finalRegShift === 'FullDay') ? 0.00 : 0.50;
-                
-                const isFirstHalfCovered = (row.shift_type === 'FirstHalf' || row.shift_type === 'FullDay' || 
+
+                const isFirstHalfCovered = (row.shift_type === 'FirstHalf' || row.shift_type === 'FullDay' ||
                     row.leave_shift_type === 'FirstHalf' || row.leave_shift_type === 'FullDay' ||
                     row.regularization_shift_type === 'FirstHalf' || row.onduty_shift_type === 'FirstHalf' || row.onduty_shift_type === 'FullDay');
-                const isSecondHalfCovered = (row.shift_type === 'SecondHalf' || row.shift_type === 'FullDay' || 
+                const isSecondHalfCovered = (row.shift_type === 'SecondHalf' || row.shift_type === 'FullDay' ||
                     row.leave_shift_type === 'SecondHalf' || row.leave_shift_type === 'FullDay' ||
                     row.regularization_shift_type === 'SecondHalf' || row.onduty_shift_type === 'SecondHalf' || row.onduty_shift_type === 'FullDay');
 
-                if ((requestedShift === 'FirstHalf' && isSecondHalfCovered) || 
+                if ((requestedShift === 'FirstHalf' && isSecondHalfCovered) ||
                     (requestedShift === 'SecondHalf' && isFirstHalfCovered) || (finalRegShift === 'FullDay')) {
                     deduction = 0.00;
                 }
@@ -431,12 +431,12 @@ class AttendanceModel {
                 }
 
                 // Check coverage
-                const isFirstHalfCovered = (row.shift_type === 'FirstHalf' || row.shift_type === 'FullDay' || 
+                const isFirstHalfCovered = (row.shift_type === 'FirstHalf' || row.shift_type === 'FullDay' ||
                     row.leave_shift_type === 'FirstHalf' || row.leave_shift_type === 'FullDay' ||
                     row.regularization_shift_type === 'FirstHalf' || row.regularization_shift_type === 'FullDay' ||
                     finalOnDutyShift === 'FirstHalf' || finalOnDutyShift === 'FullDay');
-                
-                const isSecondHalfCovered = (row.shift_type === 'SecondHalf' || row.shift_type === 'FullDay' || 
+
+                const isSecondHalfCovered = (row.shift_type === 'SecondHalf' || row.shift_type === 'FullDay' ||
                     row.leave_shift_type === 'SecondHalf' || row.leave_shift_type === 'FullDay' ||
                     row.regularization_shift_type === 'SecondHalf' || row.regularization_shift_type === 'FullDay' ||
                     finalOnDutyShift === 'SecondHalf' || finalOnDutyShift === 'FullDay');
@@ -668,7 +668,7 @@ class AttendanceModel {
                    OR (aj.current_level = 2 AND aj.approver_2_id = ?)`
                 : `OR aj.approver_1_id = ?
                    OR aj.approver_2_id = ?`;
- 
+
             dataQuery = `
                 WITH RECURSIVE subordinates AS (
                     SELECT employee_id FROM employee WHERE reporting_manager_id = ?
@@ -760,6 +760,21 @@ class AttendanceModel {
         return result.affectedRows;
     }
 
+
+    // Bulk insert machine logs
+    static async insertMachineLogsMesEdathala(logs) {
+        if (!logs || logs.length === 0) return 0;
+
+        // Prepare bulk insert values
+        // Expecting logs to be [{ employee_id: 123, punch_time: '2024-04-04 09:00:00' }, ...]
+        const values = logs.map(log => [log.employee_id, log.punch_time]);
+
+        const query = 'INSERT IGNORE INTO attendance_detail_log_mesedathala (employee_code, punch_time) VALUES ?';
+        const [result] = await pool.query(query, [values]);
+
+        return result.affectedRows;
+    }
+
     /**
      * Revert attendance records from 'Leave' status back to 'Absent' 
      * and re-evaluate them if a leave is cancelled.
@@ -768,7 +783,7 @@ class AttendanceModel {
         const start = new Date(startDate);
         const end = new Date(endDate);
         const dates = [];
-        
+
         let current = new Date(start);
         // Reset to midnight to avoid hour-based comparison issues
         current.setHours(0, 0, 0, 0);
@@ -780,7 +795,7 @@ class AttendanceModel {
             const month = String(current.getMonth() + 1).padStart(2, '0');
             const day = String(current.getDate()).padStart(2, '0');
             dates.push(`${year}-${month}-${day}`);
-            
+
             current.setDate(current.getDate() + 1);
         }
 
