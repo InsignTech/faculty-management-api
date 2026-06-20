@@ -23,18 +23,18 @@ const handleAdmsRequest = (req, res) => {
 };
 
 // Define explicit routes used by eSSL / ZKTeco ADMS devices (with and without .aspx extension)
-router.all('/cdata', handleAdmsRequest);
+// router.all('/cdata', handleAdmsRequest);
 router.all('/cdata.aspx', handleAdmsRequest);
 
-router.all('/getrequest', handleAdmsRequest);
-router.all('/getrequest.aspx', handleAdmsRequest);
+// router.all('/getrequest', handleAdmsRequest);
+// router.all('/getrequest.aspx', handleAdmsRequest);
 
-router.all('/registry', handleAdmsRequest);
-router.all('/registry.aspx', handleAdmsRequest);
+// router.all('/registry', handleAdmsRequest);
+// router.all('/registry.aspx', handleAdmsRequest);
 
-router.all('/devicecmd', handleAdmsRequest);
-router.all('/devicecmd.aspx', handleAdmsRequest);
+// router.all('/devicecmd', handleAdmsRequest);
+// router.all('/devicecmd.aspx', handleAdmsRequest);
 
-router.all('/', handleAdmsRequest);
+// router.all('/', handleAdmsRequest);
 
 module.exports = router;
