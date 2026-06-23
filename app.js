@@ -20,6 +20,7 @@ const leaveRoutes = require('./routes/leaveRoutes');
 const leaveEncashmentRoutes = require('./routes/leaveEncashmentRoutes');
 const shiftRoutes = require('./routes/shiftRoutes');
 const approverConfigRoutes = require('./routes/approverConfigRoutes');
+const payrollRoutes = require('./routes/payrollRoutes');
 const admsRoutes = require('./routes/admsRoutes');
 const setupSwagger = require('./utils/swagger');
 const debugLog = require('./utils/debugLogger');
@@ -42,6 +43,7 @@ if (process.env.NODE_ENV === 'development') {
 
 debugLog("Step 6: Setting up security...");
 // Setup Security Middlewares
+app.use(require('cors')()); // CORS support if needed or security.js manages it
 setupSecurity(app);
 
 debugLog("Step 7: Setting up Swagger...");
@@ -68,6 +70,7 @@ app.use('/api/leaves', leaveRoutes);
 app.use('/api/leave-encashments', leaveEncashmentRoutes);
 app.use('/api/shifts', shiftRoutes);
 app.use('/api/approver-config', approverConfigRoutes);
+app.use('/api/payroll', payrollRoutes);
 app.use('/iclock', admsRoutes);
 
 // 404 handler for undefined routes
