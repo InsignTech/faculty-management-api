@@ -268,7 +268,7 @@ class PayrollModel {
 
     static async getDisbursements(periodId) {
         const [rows] = await pool.execute(
-            `SELECT sd.*, e.employee_name, e.employee_code, d.departmentname, des.designation_name
+            `SELECT sd.*, e.employee_name, e.employee_code, d.departmentname, des.designation AS designation_name
              FROM salary_disbursement sd
              JOIN employee e ON sd.employee_id = e.employee_id
              LEFT JOIN department d ON e.department_id = d.department_id
@@ -286,7 +286,7 @@ class PayrollModel {
                     e.employee_code, 
                     e.joining_date,
                     d.departmentname AS department_name, 
-                    des.designation_name AS designation,
+                    des.designation AS designation,
                     eba.bank_name,
                     eba.account_number,
                     eba.ifsc_code
@@ -321,6 +321,80 @@ class PayrollModel {
             [periodId]
         );
         return rows;
+    }
+
+    static async getLopDetails(periodId, employeeId) {
+        // 1. Fetch period dates
+        const [periods] = await pool.execute('SELECT start_date, end_date FROM payroll_period WHERE period_id = ?', [periodId]);
+        if (periods.length === 0) return [];
+        const { start_date, end_date } = periods[0];
+
+        // 2. Check if there are any attendance records for this period
+        const [attCountRows] = await pool.execute(
+            'SELECT COUNT(*) AS count FROM attendance_daily WHERE employee_id = ? AND date BETWEEN ? AND ?',
+            [employeeId, start_date, end_date]
+        );
+        const hasRecords = attCountRows[0].count > 0;
+
+        if (hasRecords) {
+            // Get records with LOP deduction
+            const [rows] = await pool.execute(
+                `SELECT date, deduction_days, status, shift_type 
+                 FROM attendance_daily 
+                 WHERE employee_id = ? AND date BETWEEN ? AND ? AND (deduction_days > 0 OR status = 'Absent')
+                 ORDER BY date ASC`,
+                [employeeId, start_date, end_date]
+            );
+            return rows.map(r => ({
+                date: r.date,
+                deduction_days: parseFloat(r.deduction_days || 0),
+                reason: r.status === 'Absent' ? 'Absent' : `Deduction (${r.status})`,
+                type: 'attendance_record'
+            }));
+        } else {
+            // Calculate LOP days dynamically
+            // Get all holidays in the period
+            const [holidays] = await pool.execute(
+                `SELECT holiday_start_date, holiday_end_date, holiday_name 
+                 FROM holiday_master 
+                 WHERE is_active = 1 AND (employee_id = -1 OR employee_id = ?) 
+                   AND ((holiday_start_date <= ? AND holiday_end_date >= ?) OR (holiday_start_date BETWEEN ? AND ?) OR (holiday_end_date BETWEEN ? AND ?))`,
+                [employeeId, end_date, start_date, start_date, end_date, start_date, end_date]
+            );
+
+            const isHoliday = (dateStr) => {
+                const d = new Date(dateStr);
+                // Check Sunday (d.getDay() === 0)
+                if (d.getDay() === 0) return { isHoliday: true, name: 'Sunday' };
+                // Check holiday_master
+                for (const h of holidays) {
+                    const start = new Date(h.holiday_start_date);
+                    const end = new Date(h.holiday_end_date);
+                    if (d >= start && d <= end) {
+                        return { isHoliday: true, name: h.holiday_name };
+                    }
+                }
+                return { isHoliday: false };
+            };
+
+            const lopDays = [];
+            let curr = new Date(start_date);
+            const stop = new Date(end_date);
+            while (curr <= stop) {
+                const dateStr = curr.toISOString().split('T')[0];
+                const holidayCheck = isHoliday(dateStr);
+                if (!holidayCheck.isHoliday) {
+                    lopDays.push({
+                        date: dateStr,
+                        deduction_days: 1.0,
+                        reason: 'Missing Attendance (Working Day)',
+                        type: 'computed_lop'
+                    });
+                }
+                curr.setDate(curr.getDate() + 1);
+            }
+            return lopDays;
+        }
     }
 }
 

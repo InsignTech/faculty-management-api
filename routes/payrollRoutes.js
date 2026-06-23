@@ -69,6 +69,9 @@ router.route('/periods/:id/action')
 router.route('/periods/:id/disbursements')
     .get(payrollController.getDisbursements);
 
+router.route('/periods/:id/employees/:empId/lop-details')
+    .get(payrollController.getLopDetails);
+
 router.route('/periods/:id/statement')
     .get(payrollController.getStatement);
 

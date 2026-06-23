@@ -253,6 +253,13 @@ const getApprovalLogs = async (req, res, next) => {
     } catch (e) { next(e); }
 };
 
+const getLopDetails = async (req, res, next) => {
+    try {
+        const data = await PayrollModel.getLopDetails(req.params.id, req.params.empId);
+        sendResponse(res, 200, 'LOP details fetched successfully', data);
+    } catch (e) { next(e); }
+};
+
 module.exports = {
     getPeriods,
     createPeriod,
@@ -281,5 +288,6 @@ module.exports = {
     getDisbursements,
     getStatement,
     getLoanTracker,
-    getApprovalLogs
+    getApprovalLogs,
+    getLopDetails
 };

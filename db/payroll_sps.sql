@@ -1,9 +1,10 @@
 -- Payroll Stored Procedures
+DELIMITER //
 
 -- 1. sp_run_payroll
 -- Calculates draft salary disbursements for all active employees for a given payroll period.
-DROP PROCEDURE IF EXISTS sp_run_payroll;
-//
+DROP PROCEDURE IF EXISTS sp_run_payroll //
+
 CREATE PROCEDURE sp_run_payroll(
     IN p_organization_id INT,
     IN p_period_id INT,
@@ -17,6 +18,9 @@ BEGIN
     DECLARE v_year INT;
     DECLARE v_days_in_period INT;
     DECLARE done INT DEFAULT 0;
+    DECLARE v_attendance_count INT;
+    DECLARE v_temp_date DATE;
+    DECLARE v_weekend_holiday_count INT;
     
     DECLARE v_emp_id INT;
     DECLARE v_struct_id INT;
@@ -43,6 +47,10 @@ BEGIN
     DECLARE v_tds_amount DECIMAL(15,2);
     DECLARE v_bus_fee DECIMAL(15,2);
     DECLARE v_json_deductions JSON;
+    DECLARE v_epf_rule_basis VARCHAR(50);
+    DECLARE v_epf_rule_rate DECIMAL(10,4);
+    DECLARE v_esi_rule_basis VARCHAR(50);
+    DECLARE v_esi_rule_rate DECIMAL(10,4);
     
     -- Cursor for employees
     DECLARE emp_cursor CURSOR FOR 
@@ -89,19 +97,58 @@ BEGIN
         
         -- Get active structure for employee
         SET v_struct_id = NULL;
-        SELECT structure_id, basic_pay, hra, educational_allowance, special_allowance, naac_allowance, gross_salary
-        INTO v_struct_id, v_basic_pay, v_hra, v_edu_allowance, v_spec_allowance, v_naac_allowance, v_gross_salary
-        FROM salary_structure
-        WHERE employee_id = v_emp_id AND is_current = 1
-        LIMIT 1;
+        BEGIN
+            DECLARE CONTINUE HANDLER FOR NOT FOUND BEGIN END;
+            SELECT structure_id, basic_pay, hra, educational_allowance, special_allowance, naac_allowance, gross_salary
+            INTO v_struct_id, v_basic_pay, v_hra, v_edu_allowance, v_spec_allowance, v_naac_allowance, v_gross_salary
+            FROM salary_structure
+            WHERE employee_id = v_emp_id AND is_current = 1
+            LIMIT 1;
+        END;
         
         -- If no salary structure is defined, skip or create default empty
         IF v_struct_id IS NOT NULL THEN
-            -- Calculate LOP days from attendance_daily
-            SELECT COALESCE(SUM(deduction_days), 0)
-            INTO v_lop_days
+            -- Initialize/reset calculation variables for each employee
+            SET v_epf_base = 0;
+            SET v_epf_rule_rate = 12.0;
+            SET v_epf_rule_basis = 'basic_pay';
+            SET v_esi_base = 0;
+            SET v_esi_rule_rate = 0.75;
+            SET v_esi_rule_basis = 'gross_salary';
+            SET v_tds_amount = 0;
+            SET v_pt_amount = 0;
+            SET v_loan_deduction = 0;
+            SET v_bus_fee = 0;
+
+            -- Check if there are any attendance records for this period
+            SET v_attendance_count = 0;
+            SELECT COUNT(*) INTO v_attendance_count
             FROM attendance_daily
             WHERE employee_id = v_emp_id AND date BETWEEN v_start_date AND v_end_date;
+
+            IF v_attendance_count = 0 THEN
+                -- No records at all. Calculate all working days as LOP (excluding Sundays and holidays)
+                SET v_weekend_holiday_count = 0;
+                SET v_temp_date = v_start_date;
+                WHILE v_temp_date <= v_end_date DO
+                    IF DAYOFWEEK(v_temp_date) = 1 OR EXISTS (
+                        SELECT 1 FROM holiday_master
+                        WHERE is_active = 1
+                          AND (employee_id = -1 OR employee_id = v_emp_id)
+                          AND v_temp_date BETWEEN holiday_start_date AND holiday_end_date
+                    ) THEN
+                        SET v_weekend_holiday_count = v_weekend_holiday_count + 1;
+                    END IF;
+                    SET v_temp_date = DATE_ADD(v_temp_date, INTERVAL 1 DAY);
+                END WHILE;
+                SET v_lop_days = v_days_in_period - v_weekend_holiday_count;
+            ELSE
+                -- Calculate LOP days from attendance_daily
+                SELECT COALESCE(SUM(deduction_days), 0)
+                INTO v_lop_days
+                FROM attendance_daily
+                WHERE employee_id = v_emp_id AND date BETWEEN v_start_date AND v_end_date;
+            END IF;
             
             -- LOP deduction amount
             SET v_lop_deduction = ROUND((v_gross_salary / v_days_in_period) * v_lop_days, 2);
@@ -119,22 +166,37 @@ BEGIN
                            WHERE edc.employee_id = v_emp_id AND drm.deduction_code = 'EPF' AND edc.is_applicable = 0) 
                AND EXISTS (SELECT 1 FROM deduction_rule_master WHERE deduction_code = 'EPF' AND is_active = 1) THEN
                
-                -- Base is basic_pay (adjusted for LOP pro-rata)
-                SET v_epf_base = ROUND(v_basic_pay * (1 - (v_lop_days / v_days_in_period)), 2);
+                BEGIN
+                    DECLARE CONTINUE HANDLER FOR NOT FOUND BEGIN END;
+                    SELECT COALESCE(calc_basis, 'basic_pay'), COALESCE(rate, 12.0)
+                    INTO v_epf_rule_basis, v_epf_rule_rate
+                    FROM deduction_rule_master
+                    WHERE deduction_code = 'EPF' AND is_active = 1;
+                END;
+               
+                -- Base calculation based on dynamic calc_basis
+                IF v_epf_rule_basis = 'gross_salary' THEN
+                    SET v_epf_base = ROUND(v_gross_salary * (1 - (v_lop_days / v_days_in_period)), 2);
+                ELSE
+                    SET v_epf_base = ROUND(v_basic_pay * (1 - (v_lop_days / v_days_in_period)), 2);
+                END IF;
                 -- Apply wage ceiling
                 IF v_epf_base > 15000.00 THEN
                     SET v_epf_base = 15000.00;
                 END IF;
-                SET v_epf_amount = ROUND(v_epf_base * 0.12, 2);
+                SET v_epf_amount = ROUND(v_epf_base * (v_epf_rule_rate / 100), 2);
             END IF;
             
             -- Apply custom overrides if set in employee_deduction_config
-            SELECT COALESCE(edc.override_amount, v_epf_amount)
-            INTO v_epf_amount
-            FROM employee_deduction_config edc
-            JOIN deduction_rule_master drm ON edc.rule_id = drm.rule_id
-            WHERE edc.employee_id = v_emp_id AND drm.deduction_code = 'EPF' AND edc.is_applicable = 1
-            LIMIT 1;
+            BEGIN
+                DECLARE CONTINUE HANDLER FOR NOT FOUND BEGIN END;
+                SELECT COALESCE(edc.override_amount, v_epf_amount)
+                INTO v_epf_amount
+                FROM employee_deduction_config edc
+                JOIN deduction_rule_master drm ON edc.rule_id = drm.rule_id
+                WHERE edc.employee_id = v_emp_id AND drm.deduction_code = 'EPF' AND edc.is_applicable = 1
+                LIMIT 1;
+            END;
             
             -- ESI Calculation
             SET v_esi_amount = 0;
@@ -143,54 +205,79 @@ BEGIN
                            WHERE edc.employee_id = v_emp_id AND drm.deduction_code = 'ESI' AND edc.is_applicable = 0)
                AND EXISTS (SELECT 1 FROM deduction_rule_master WHERE deduction_code = 'ESI' AND is_active = 1) THEN
                 
-                -- Skip if gross > 21000
-                IF v_payable_amount <= 21000.00 THEN
+                BEGIN
+                    DECLARE CONTINUE HANDLER FOR NOT FOUND BEGIN END;
+                    SELECT COALESCE(calc_basis, 'gross_salary'), COALESCE(rate, 0.75)
+                    INTO v_esi_rule_basis, v_esi_rule_rate
+                    FROM deduction_rule_master
+                    WHERE deduction_code = 'ESI' AND is_active = 1;
+                END;
+
+                -- Base calculation based on dynamic calc_basis
+                IF v_esi_rule_basis = 'basic_pay' THEN
+                    SET v_esi_base = ROUND(v_basic_pay * (1 - (v_lop_days / v_days_in_period)), 2);
+                ELSE
                     SET v_esi_base = v_payable_amount;
-                    SET v_esi_amount = ROUND(v_esi_base * 0.0075, 2);
+                END IF;
+                
+                -- Skip if base > 21000
+                IF v_esi_base <= 21000.00 THEN
+                    SET v_esi_amount = ROUND(v_esi_base * (v_esi_rule_rate / 100), 2);
                 END IF;
             END IF;
             
-            SELECT COALESCE(edc.override_amount, v_esi_amount)
-            INTO v_esi_amount
-            FROM employee_deduction_config edc
-            JOIN deduction_rule_master drm ON edc.rule_id = drm.rule_id
-            WHERE edc.employee_id = v_emp_id AND drm.deduction_code = 'ESI' AND edc.is_applicable = 1
-            LIMIT 1;
+            BEGIN
+                DECLARE CONTINUE HANDLER FOR NOT FOUND BEGIN END;
+                SELECT COALESCE(edc.override_amount, v_esi_amount)
+                INTO v_esi_amount
+                FROM employee_deduction_config edc
+                JOIN deduction_rule_master drm ON edc.rule_id = drm.rule_id
+                WHERE edc.employee_id = v_emp_id AND drm.deduction_code = 'ESI' AND edc.is_applicable = 1
+                LIMIT 1;
+            END;
             
             -- TDS Calculation
-            SET v_tds_amount = 0;
-            SELECT COALESCE(tds_override_amount, 0)
-            INTO v_tds_amount
-            FROM employee_tds_config
-            WHERE employee_id = v_emp_id AND financial_year = CONCAT(v_year, '-', v_year+1)
-            LIMIT 1;
+            BEGIN
+                DECLARE CONTINUE HANDLER FOR NOT FOUND BEGIN END;
+                SELECT COALESCE(tds_override_amount, 0)
+                INTO v_tds_amount
+                FROM employee_tds_config
+                WHERE employee_id = v_emp_id AND financial_year = CONCAT(v_year, '-', v_year+1)
+                LIMIT 1;
+            END;
             
             -- Profession Tax (Slabs)
-            SET v_pt_amount = 0;
-            SELECT COALESCE(monthly_tax, 0)
-            INTO v_pt_amount
-            FROM profession_tax_slab
-            WHERE v_payable_amount >= min_salary AND (max_salary IS NULL OR v_payable_amount <= max_salary)
-              AND (effective_to IS NULL OR effective_to >= v_start_date)
-            ORDER BY min_salary DESC
-            LIMIT 1;
+            BEGIN
+                DECLARE CONTINUE HANDLER FOR NOT FOUND BEGIN END;
+                SELECT COALESCE(monthly_tax, 0)
+                INTO v_pt_amount
+                FROM profession_tax_slab
+                WHERE v_payable_amount >= min_salary AND (max_salary IS NULL OR v_payable_amount <= max_salary)
+                  AND (effective_to IS NULL OR effective_to >= v_start_date)
+                ORDER BY min_salary DESC
+                LIMIT 1;
+            END;
             
             -- Loan / Salary Advance Deduction
-            SET v_loan_deduction = 0;
-            SELECT COALESCE(SUM(LEAST(monthly_deduction, balance_amount)), 0)
-            INTO v_loan_deduction
-            FROM employee_loan
-            WHERE employee_id = v_emp_id AND status = 'active' AND balance_amount > 0
-              AND (deduction_start_year < v_year OR (deduction_start_year = v_year AND v_period_id >= deduction_start_month));
+            BEGIN
+                DECLARE CONTINUE HANDLER FOR NOT FOUND BEGIN END;
+                SELECT COALESCE(SUM(LEAST(monthly_deduction, balance_amount)), 0)
+                INTO v_loan_deduction
+                FROM employee_loan
+                WHERE employee_id = v_emp_id AND status = 'active' AND balance_amount > 0
+                  AND (deduction_start_year < v_year OR (deduction_start_year = v_year AND v_month >= deduction_start_month));
+            END;
               
             -- Bus Fee or other custom deductions
-            SET v_bus_fee = 0;
-            SELECT COALESCE(edc.override_amount, drm.fixed_amount, 0)
-            INTO v_bus_fee
-            FROM employee_deduction_config edc
-            JOIN deduction_rule_master drm ON edc.rule_id = drm.rule_id
-            WHERE edc.employee_id = v_emp_id AND drm.deduction_code = 'BUS_FEE' AND edc.is_applicable = 1
-            LIMIT 1;
+            BEGIN
+                DECLARE CONTINUE HANDLER FOR NOT FOUND BEGIN END;
+                SELECT COALESCE(edc.override_amount, drm.fixed_amount, 0)
+                INTO v_bus_fee
+                FROM employee_deduction_config edc
+                JOIN deduction_rule_master drm ON edc.rule_id = drm.rule_id
+                WHERE edc.employee_id = v_emp_id AND drm.deduction_code = 'BUS_FEE' AND edc.is_applicable = 1
+                LIMIT 1;
+            END;
             
             -- Total Deductions
             SET v_total_deduction = v_epf_amount + v_esi_amount + v_tds_amount + v_pt_amount + v_loan_deduction + v_bus_fee;
@@ -200,14 +287,24 @@ BEGIN
                 SET v_net_salary = 0;
             END IF;
             
-            -- Construct JSON deductions
+            -- Construct JSON deductions (with all calculation bases and metadata)
             SET v_json_deductions = JSON_OBJECT(
                 'EPF', v_epf_amount,
+                'EPF_base', v_epf_base,
+                'EPF_rate', v_epf_rule_rate,
                 'ESI', v_esi_amount,
+                'ESI_base', v_esi_base,
+                'ESI_rate', v_esi_rule_rate,
                 'TDS', v_tds_amount,
                 'ProfessionTax', v_pt_amount,
                 'LoanEMI', v_loan_deduction,
-                'BusFee', v_bus_fee
+                'BusFee', v_bus_fee,
+                'LOP_days', v_lop_days,
+                'LOP_deduction', v_lop_deduction,
+                'Gross_salary', v_gross_salary,
+                'Basic_pay', v_basic_pay,
+                'Payable_amount', v_payable_amount,
+                'Days_in_period', v_days_in_period
             );
             
             -- Insert into salary_disbursement
@@ -243,8 +340,8 @@ END;
 
 -- 2. sp_action_payroll_period
 -- Actions status change for a payroll period (submit, verify, approve, pay, reject) and logs it.
-DROP PROCEDURE IF EXISTS sp_action_payroll_period;
-//
+DROP PROCEDURE IF EXISTS sp_action_payroll_period //
+
 CREATE PROCEDURE sp_action_payroll_period(
     IN p_period_id INT,
     IN p_action VARCHAR(30), -- 'submitted', 'verified', 'approved', 'paid', 'rejected'
@@ -325,3 +422,5 @@ BEGIN
     SELECT ROW_COUNT() AS updated_disbursements;
 END;
 //
+DELIMITER ;
+
