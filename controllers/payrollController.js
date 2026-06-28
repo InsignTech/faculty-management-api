@@ -1,6 +1,7 @@
 const PayrollModel = require('../models/payrollModel');
 const { sendResponse } = require('../utils/responseHelper');
 const ErrorResponse = require('../utils/errorResponse');
+const excelHelper = require('../utils/excelHelper');
 
 // --- Periods ---
 const getPeriods = async (req, res, next) => {
@@ -277,7 +278,18 @@ const updateDisbursement = async (req, res, next) => {
     } catch (e) { next(e); }
 };
 
+const exportExcel = async (req, res, next) => {
+    try {
+        const workbook = await excelHelper.generateExcelStatement(req.params.id);
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename=payroll_statement_${req.params.id}.xlsx`);
+        await workbook.xlsx.write(res);
+        res.end();
+    } catch (e) { next(e); }
+};
+
 module.exports = {
+    exportExcel,
     getPeriods,
     createPeriod,
     updatePeriod,
