@@ -1,33 +1,30 @@
-const mysql = require('mysql2/promise');
-require('dotenv').config();
+const pool = require('../config/db');
 
-async function checkDb() {
-    const pool = mysql.createPool({
-        host: process.env.DB_HOST,
-        user: process.env.DB_USER,
-        password: process.env.DB_PASSWORD,
-        database: process.env.DB_NAME
-    });
-
+async function main() {
     try {
-        const [tables] = await pool.query("SHOW TABLES LIKE 'settings'");
-        console.log('Tables:', tables);
-        
-        if (tables.length > 0) {
-            const [columns] = await pool.query("DESCRIBE settings");
-            console.log('Columns:', columns);
-            
-            const [data] = await pool.query("SELECT * FROM settings");
-            console.log('Data:', data);
-        }
+        console.log('--- Employee Types & Counts ---');
+        const [empTypes] = await pool.query('SELECT employee_type, COUNT(*) as count FROM employee GROUP BY employee_type');
+        console.log(empTypes);
 
-        const [procs] = await pool.query("SHOW PROCEDURE STATUS WHERE Db = ? AND Name = 'sp_get_setting'", [process.env.DB_NAME]);
-        console.log('Procedures:', procs);
-    } catch (err) {
-        console.error(err);
+        console.log('\n--- Sample Employee Fields ---');
+        const [emps] = await pool.query('SELECT employee_id, employee_code, employee_name, employee_type, designation_id, department_id, active FROM employee LIMIT 5');
+        console.log(emps);
+
+        console.log('\n--- Sample Salary Structures ---');
+        const [structs] = await pool.query('SELECT * FROM salary_structure LIMIT 3');
+        console.log(structs);
+
+        console.log('\n--- Sample Disbursements ---');
+        const [disbs] = await pool.query('SELECT * FROM salary_disbursement LIMIT 3');
+        console.log(disbs);
+
+        console.log('\n--- Sample Payroll Periods ---');
+        const [periods] = await pool.query('SELECT * FROM payroll_period');
+        console.log(periods);
+    } catch (e) {
+        console.error(e);
     } finally {
-        await pool.end();
+        process.exit();
     }
 }
-
-checkDb();
+main();

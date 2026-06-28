@@ -79,6 +79,9 @@ router.route('/periods/:id/employees/:empId/lop-details')
 router.route('/periods/:id/statement')
     .get(payrollController.getStatement);
 
+router.route('/periods/:id/export-excel')
+    .get(payrollController.exportExcel);
+
 router.route('/periods/:id/approval-logs')
     .get(payrollController.getApprovalLogs);
 
