@@ -61,13 +61,17 @@ router.route('/loans/tracker')
 
 // --- Processing Operations ---
 router.route('/periods/:id/run')
-    .post(authorize('super_admin', 'Admin'), payrollController.runPayroll);
+    .post(authorize('super_admin', 'Admin'), payrollController.runPayroll)
+    .delete(authorize('super_admin', 'Admin'), payrollController.deletePayrollRun);
 
 router.route('/periods/:id/action')
     .post(authorize('super_admin', 'Admin', 'Principal'), payrollController.actionPayrollPeriod);
 
 router.route('/periods/:id/disbursements')
     .get(payrollController.getDisbursements);
+
+router.route('/disbursements/:id')
+    .put(authorize('super_admin', 'Admin', 'Principal'), payrollController.updateDisbursement);
 
 router.route('/periods/:id/employees/:empId/lop-details')
     .get(payrollController.getLopDetails);

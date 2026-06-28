@@ -82,10 +82,7 @@ BEGIN
     -- Clean up previous runs for this period
     DELETE FROM salary_disbursement WHERE period_id = p_period_id;
     
-    SET v_days_in_period = DATEDIFF(v_end_date, v_start_date) + 1;
-    IF v_days_in_period <= 0 THEN
-        SET v_days_in_period = 30;
-    END IF;
+    SET v_days_in_period = 30;
     
     OPEN emp_cursor;
     

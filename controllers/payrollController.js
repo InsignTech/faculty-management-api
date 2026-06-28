@@ -213,6 +213,14 @@ const runPayroll = async (req, res, next) => {
     } catch (e) { next(e); }
 };
 
+const deletePayrollRun = async (req, res, next) => {
+    try {
+        const affected = await PayrollModel.deletePayrollRun(req.params.id);
+        if (affected === 0) return next(new ErrorResponse('Payroll period not found', 404));
+        sendResponse(res, 200, 'Payroll run deleted successfully');
+    } catch (e) { next(e); }
+};
+
 const actionPayrollPeriod = async (req, res, next) => {
     try {
         const { action, remarks } = req.body;
@@ -260,6 +268,15 @@ const getLopDetails = async (req, res, next) => {
     } catch (e) { next(e); }
 };
 
+const updateDisbursement = async (req, res, next) => {
+    try {
+        const actionBy = req.user?.employeeId || 999;
+        const affected = await PayrollModel.updateDisbursement(req.params.id, req.body, actionBy);
+        if (affected === 0) return next(new ErrorResponse('Disbursement not found', 404));
+        sendResponse(res, 200, 'Disbursement updated successfully');
+    } catch (e) { next(e); }
+};
+
 module.exports = {
     getPeriods,
     createPeriod,
@@ -284,10 +301,12 @@ module.exports = {
     createLoan,
     updateLoanStatus,
     runPayroll,
+    deletePayrollRun,
     actionPayrollPeriod,
     getDisbursements,
     getStatement,
     getLoanTracker,
     getApprovalLogs,
-    getLopDetails
+    getLopDetails,
+    updateDisbursement
 };

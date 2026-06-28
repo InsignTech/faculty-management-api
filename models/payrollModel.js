@@ -187,7 +187,7 @@ class PayrollModel {
 
     static async saveBankAccount(employeeId, data) {
         const { bank_name, branch_name, account_number, ifsc_code, account_type, is_primary, is_active } = data;
-        
+
         const conn = await pool.getConnection();
         try {
             await conn.beginTransaction();
@@ -258,6 +258,26 @@ class PayrollModel {
         return rows[0]?.[0] || { processed_count: 0 };
     }
 
+    static async deletePayrollRun(periodId) {
+        const conn = await pool.getConnection();
+        try {
+            await conn.beginTransaction();
+            // Delete from payroll_approval_log first (to prevent foreign key violations if any)
+            await conn.execute('DELETE FROM payroll_approval_log WHERE period_id = ?', [periodId]);
+            // Then delete from salary_disbursement
+            await conn.execute('DELETE FROM salary_disbursement WHERE period_id = ?', [periodId]);
+            // Update payroll_period status back to 'draft'
+            const [result] = await conn.execute('UPDATE payroll_period SET status = \'draft\' WHERE period_id = ?', [periodId]);
+            await conn.commit();
+            return result.affectedRows;
+        } catch (e) {
+            await conn.rollback();
+            throw e;
+        } finally {
+            conn.release();
+        }
+    }
+
     static async actionPayrollPeriod(periodId, action, actionBy, remarks) {
         const [rows] = await pool.execute(
             'CALL sp_action_payroll_period(?, ?, ?, ?)',
@@ -313,12 +333,22 @@ class PayrollModel {
 
     static async getApprovalLogs(periodId) {
         const [rows] = await pool.execute(
-            `SELECT pal.*, e.employee_name AS actor_name
+            `SELECT pal.*, e.employee_name AS actor_name,
+                    CASE WHEN pal.action = 'edited' THEN emp.employee_name ELSE NULL END AS target_employee_name
              FROM payroll_approval_log pal
-             JOIN employee e ON pal.action_by = e.employee_id
+             LEFT JOIN employee e ON pal.action_by = e.employee_id
+             LEFT JOIN salary_disbursement sd ON pal.disbursement_id = sd.disbursement_id
+             LEFT JOIN employee emp ON sd.employee_id = emp.employee_id
              WHERE pal.period_id = ?
-             ORDER BY pal.action_on DESC`,
-            [periodId]
+               AND (pal.action = 'edited'
+                    OR pal.log_id IN (
+                        SELECT MIN(log_id)
+                        FROM payroll_approval_log
+                        WHERE period_id = ? AND action != 'edited'
+                        GROUP BY action, action_by, action_on, remarks
+                    ))
+             ORDER BY pal.action_on DESC, pal.log_id DESC`,
+            [periodId, periodId]
         );
         return rows;
     }
@@ -395,6 +425,123 @@ class PayrollModel {
             }
             return lopDays;
         }
+    }
+
+    static async updateDisbursement(id, data, updatedBy) {
+        const { basic_pay, hra, educational_allowance, special_allowance, naac_allowance, lop_days, tds, loan_emi, bus_fee } = data;
+
+        // 1. Fetch original disbursement to retrieve original deductions_json and check applicability
+        const [rows] = await pool.execute('SELECT * FROM salary_disbursement WHERE disbursement_id = ?', [id]);
+        if (rows.length === 0) return 0;
+        const old = rows[0];
+
+        const oldDec = typeof old.deductions_json === 'string' ? JSON.parse(old.deductions_json) : (old.deductions_json || {});
+
+        // Build diff for history tracking
+        const diffs = [];
+        const compareAndAdd = (name, oldVal, newVal) => {
+            const o = parseFloat(oldVal || 0);
+            const n = parseFloat(newVal || 0);
+            if (o !== n) {
+                diffs.push(`${name}: ${o} -> ${n}`);
+            }
+        };
+
+        compareAndAdd('Basic Pay', old.basic_pay, basic_pay);
+        compareAndAdd('HRA', old.hra, hra);
+        compareAndAdd('Edu Allowance', old.educational_allowance, educational_allowance);
+        compareAndAdd('Spec Allowance', old.special_allowance, special_allowance);
+        compareAndAdd('NAAC Allowance', old.naac_allowance, naac_allowance);
+        compareAndAdd('LOP Days', old.lop_days, lop_days);
+        compareAndAdd('TDS', oldDec.TDS, tds);
+        compareAndAdd('Loan EMI', oldDec.LoanEMI, loan_emi);
+        compareAndAdd('Bus Fee', oldDec.BusFee, bus_fee);
+
+        const remarksText = diffs.length > 0 ? `Edited: ${diffs.join(', ')}` : 'Edited (no values changed)';
+
+        // 2. Perform recalculations
+        const gross_salary = parseFloat(basic_pay) + parseFloat(hra) + parseFloat(educational_allowance) + parseFloat(special_allowance) + parseFloat(naac_allowance);
+
+        // Fixed 30-day divisor for LOP deduction
+        const lop_deduction = Math.round((gross_salary / 30) * parseFloat(lop_days) * 100) / 100;
+        const payable_amount = Math.max(0, gross_salary - lop_deduction);
+
+        // EPF Recalculation
+        const hasEPF = (oldDec.EPF > 0 || oldDec.EPF_rate > 0);
+        const epf_rate = oldDec.EPF_rate || 12.0;
+        // EPF base is pro-rated earned basic pay, capped at 15000
+        const epf_base = Math.min(15000, Math.round(parseFloat(basic_pay) * (1 - (parseFloat(lop_days) / 30)) * 100) / 100);
+        const epf_amount = hasEPF ? Math.round(epf_base * (epf_rate / 100) * 100) / 100 : 0;
+
+        // ESI Recalculation
+        const hasESI = (oldDec.ESI > 0 || oldDec.ESI_rate > 0);
+        const esi_rate = oldDec.ESI_rate || 0.75;
+        const esi_base = payable_amount;
+        const esi_amount = (hasESI && esi_base <= 21000) ? Math.round(esi_base * (esi_rate / 100) * 100) / 100 : 0;
+
+        // Profession Tax Slab lookup
+        const [ptRows] = await pool.execute(
+            `SELECT COALESCE(monthly_tax, 0) AS pt_amount
+             FROM profession_tax_slab
+             WHERE ? >= min_salary AND (max_salary IS NULL OR ? <= max_salary)
+             ORDER BY min_salary DESC LIMIT 1`,
+            [payable_amount, payable_amount]
+        );
+        const pt_amount = ptRows[0]?.pt_amount || 0;
+
+        // Total Deductions
+        const total_deduction = epf_amount + esi_amount + parseFloat(tds || 0) + parseFloat(pt_amount || 0) + parseFloat(loan_emi || 0) + parseFloat(bus_fee || 0);
+
+        const net_salary = Math.max(0, payable_amount - total_deduction);
+
+        // Construct new JSON
+        const deductions_json = JSON.stringify({
+            ...oldDec,
+            EPF: epf_amount,
+            EPF_base: epf_base,
+            EPF_rate: epf_rate,
+            ESI: esi_amount,
+            ESI_base: esi_base,
+            ESI_rate: esi_rate,
+            TDS: parseFloat(tds || 0),
+            ProfessionTax: pt_amount,
+            LoanEMI: parseFloat(loan_emi || 0),
+            BusFee: parseFloat(bus_fee || 0),
+            LOP_days: parseFloat(lop_days),
+            LOP_deduction: lop_deduction,
+            Gross_salary: gross_salary,
+            Basic_pay: parseFloat(basic_pay),
+            Payable_amount: payable_amount,
+            Days_in_period: 30
+        });
+
+        // Update database row
+        const [result] = await pool.execute(
+            `UPDATE salary_disbursement SET
+                basic_pay = ?,
+                hra = ?,
+                educational_allowance = ?,
+                special_allowance = ?,
+                naac_allowance = ?,
+                gross_salary = ?,
+                lop_days = ?,
+                payable_amount = ?,
+                deductions_json = ?,
+                total_deduction = ?,
+                net_salary = ?
+             WHERE disbursement_id = ?`,
+            [basic_pay, hra, educational_allowance, special_allowance, naac_allowance, gross_salary, lop_days, payable_amount, deductions_json, total_deduction, net_salary, id]
+        );
+
+        // Log edit event
+        await pool.execute(
+            `INSERT INTO payroll_approval_log (
+                disbursement_id, period_id, action, action_by, action_on, remarks, previous_status, new_status
+             ) VALUES (?, ?, 'edited', ?, NOW(), ?, ?, ?)`,
+            [id, old.period_id, updatedBy || 999, remarksText, old.status, old.status]
+        );
+
+        return result.affectedRows;
     }
 }
 
