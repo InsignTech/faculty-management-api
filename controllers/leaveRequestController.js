@@ -161,7 +161,7 @@ const isPreviousMonth = (dateStr) => {
 
 const superAdminApplyLeave = async (req, res, next) => {
   try {
-    const { employee_id, start_date, end_date, confirmPreviousMonth } = req.body;
+    const { employee_id, start_date, end_date, confirmPreviousMonth, confirmConflicts } = req.body;
     if (!employee_id || !start_date || !end_date) {
       return res.status(400).json({ success: false, message: 'employee_id, start_date, and end_date are required' });
     }
@@ -172,6 +172,104 @@ const superAdminApplyLeave = async (req, res, next) => {
         warning: 'previous_month_warning',
         message: 'Warning: One or more dates belong to a previous month. Salary calculation has already been processed for this period. Please confirm to proceed.'
       });
+    }
+
+    // Check conflicts if confirmConflicts is not true
+    if (!confirmConflicts) {
+      // 1. Get attendance daily logs
+      const [attendanceRows] = await pool.execute(
+        `SELECT date, status, worked_mins, regularization_shift_type, onduty_shift_type, is_leave, leave_shift_type 
+         FROM attendance_daily 
+         WHERE employee_id = ? AND date BETWEEN ? AND ?`,
+        [employee_id, start_date, end_date]
+      );
+      
+      // 2. Get holidays
+      const [holidayRows] = await pool.execute(
+        `SELECT holiday_name, holiday_start_date, holiday_end_date 
+         FROM holiday_master 
+         WHERE is_active = 1 
+           AND (employee_id = -1 OR employee_id = ?)
+           AND (holiday_start_date <= ? AND holiday_end_date >= ?)`,
+        [employee_id, end_date, start_date]
+      );
+      
+      const conflicts = [];
+      const [sYear, sMonth, sDay] = start_date.split('-').map(Number);
+      const [eYear, eMonth, eDay] = end_date.split('-').map(Number);
+      
+      const start = new Date(sYear, sMonth - 1, sDay);
+      const end = new Date(eYear, eMonth - 1, eDay);
+      let curr = new Date(start);
+      
+      while (curr <= end) {
+        const year = curr.getFullYear();
+        const month = String(curr.getMonth() + 1).padStart(2, '0');
+        const day = String(curr.getDate()).padStart(2, '0');
+        const dateStr = `${year}-${month}-${day}`;
+        
+        // Check Sunday
+        if (curr.getDay() === 0) {
+          conflicts.push(`${dateStr} is a Sunday`);
+        }
+        
+        // Check holiday
+        const isHoliday = holidayRows.some(h => {
+          const hStart = new Date(h.holiday_start_date);
+          const hEnd = new Date(h.holiday_end_date);
+          // Set to midnight local to compare timezone-safely
+          const checkDate = new Date(year, curr.getMonth(), curr.getDate());
+          const compStart = new Date(hStart.getFullYear(), hStart.getMonth(), hStart.getDate());
+          const compEnd = new Date(hEnd.getFullYear(), hEnd.getMonth(), hEnd.getDate());
+          return checkDate >= compStart && checkDate <= compEnd;
+        });
+        if (isHoliday) {
+          const h = holidayRows.find(h => {
+            const hStart = new Date(h.holiday_start_date);
+            const hEnd = new Date(h.holiday_end_date);
+            const checkDate = new Date(year, curr.getMonth(), curr.getDate());
+            const compStart = new Date(hStart.getFullYear(), hStart.getMonth(), hStart.getDate());
+            const compEnd = new Date(hEnd.getFullYear(), hEnd.getMonth(), hEnd.getDate());
+            return checkDate >= compStart && checkDate <= compEnd;
+          });
+          conflicts.push(`${dateStr} is a Holiday (${h.holiday_name})`);
+        }
+        
+        // Check attendance daily
+        const att = attendanceRows.find(a => {
+          let aDate;
+          if (a.date instanceof Date) {
+            const y = a.date.getFullYear();
+            const m = String(a.date.getMonth() + 1).padStart(2, '0');
+            const d = String(a.date.getDate()).padStart(2, '0');
+            aDate = `${y}-${m}-${d}`;
+          } else {
+            aDate = String(a.date).split('T')[0];
+          }
+          return aDate === dateStr;
+        });
+        if (att) {
+          if (att.status === 'Present' || att.worked_mins > 0) {
+            conflicts.push(`${dateStr} has existing attendance (Status: Present, Worked: ${att.worked_mins} mins)`);
+          } else if (att.regularization_shift_type) {
+            conflicts.push(`${dateStr} has an approved regularization (${att.regularization_shift_type})`);
+          } else if (att.onduty_shift_type) {
+            conflicts.push(`${dateStr} has an approved on-duty (${att.onduty_shift_type})`);
+          } else if (att.is_leave) {
+            conflicts.push(`${dateStr} already has an approved leave (${att.leave_shift_type || 'FullDay'})`);
+          }
+        }
+        
+        curr.setDate(curr.getDate() + 1);
+      }
+      
+      if (conflicts.length > 0) {
+        return res.status(200).json({
+          success: false,
+          warning: 'conflict_warning',
+          message: `Warning: The requested leave period overlaps with weekends, holidays, or existing attendance logs:\n\n${conflicts.map(c => `• ${c}`).join('\n')}\n\nProceeding will overwrite attendance status. Do you wish to proceed?`
+        });
+      }
     }
 
     const superAdminEmployeeId = req.user?.employeeId || req.user?.id || 1;
