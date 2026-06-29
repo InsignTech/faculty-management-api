@@ -543,6 +543,45 @@ class PayrollModel {
 
         return result.affectedRows;
     }
+
+    // --- Workflow Config ---
+    static async getWorkflowConfig() {
+        const [rows] = await pool.execute(`
+            SELECT pwc.*, ua.user_display_name, ua.email, emp.employee_name, emp.employee_code
+            FROM payroll_workflow_config pwc
+            LEFT JOIN user_accounts ua ON pwc.assigned_to_user_id = ua.user_accounts_id
+            LEFT JOIN employee emp ON ua.employee_id = emp.employee_id
+            ORDER BY pwc.level_number ASC
+        `);
+        return rows;
+    }
+
+    static async updateWorkflowConfig(levelId, assignedToUserId, assignedToRole) {
+        const [result] = await pool.execute(
+            `UPDATE payroll_workflow_config 
+             SET assigned_to_user_id = ?, assigned_to_role = ?
+             WHERE level_id = ?`,
+            [assignedToUserId || null, assignedToRole || null, levelId]
+        );
+        return result.affectedRows;
+    }
+
+    static async getWorkflowUsers() {
+        const [rows] = await pool.execute(`
+            SELECT ua.user_accounts_id, ua.user_display_name, ua.email, r.role as role_name, emp.employee_name
+            FROM user_accounts ua
+            LEFT JOIN app_role r ON ua.role_id = r.role_id
+            LEFT JOIN employee emp ON ua.employee_id = emp.employee_id
+            WHERE ua.active = 1
+            ORDER BY COALESCE(emp.employee_name, ua.user_display_name) ASC
+        `);
+        return rows;
+    }
+
+    static async getWorkflowRoles() {
+        const [rows] = await pool.execute('SELECT role_id, role FROM app_role ORDER BY role ASC');
+        return rows;
+    }
 }
 
 module.exports = PayrollModel;

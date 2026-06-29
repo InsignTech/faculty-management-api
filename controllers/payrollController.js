@@ -206,8 +206,27 @@ const updateLoanStatus = async (req, res, next) => {
 };
 
 // --- Processing Operations ---
+const isAuthorizedForLevel1 = async (req) => {
+    const userRole = req.user.role ? req.user.role.toLowerCase() : '';
+    if (['super_admin', 'admin'].includes(userRole)) {
+        return true;
+    }
+    const configs = await PayrollModel.getWorkflowConfig();
+    const activeConfig = configs.find(c => c.level_name === 'submitted');
+    if (activeConfig) {
+        const userId = req.user.id;
+        const matchesUser = activeConfig.assigned_to_user_id !== null && activeConfig.assigned_to_user_id === userId;
+        const matchesRole = activeConfig.assigned_to_role !== null && activeConfig.assigned_to_role.toLowerCase() === userRole;
+        return matchesUser || matchesRole;
+    }
+    return false;
+};
+
 const runPayroll = async (req, res, next) => {
     try {
+        if (!(await isAuthorizedForLevel1(req))) {
+            return next(new ErrorResponse("You are not authorized to run payroll calculations. Only the assigned Level 1 (Submit) user or role can perform this action.", 403));
+        }
         const preparedBy = req.user?.employeeId || 999; // Fallback to super_admin id if needed
         const result = await PayrollModel.runPayroll(req.params.id, preparedBy);
         sendResponse(res, 200, 'Payroll processed successfully', result);
@@ -216,6 +235,9 @@ const runPayroll = async (req, res, next) => {
 
 const deletePayrollRun = async (req, res, next) => {
     try {
+        if (!(await isAuthorizedForLevel1(req))) {
+            return next(new ErrorResponse("You are not authorized to delete payroll runs. Only the assigned Level 1 (Submit) user or role can perform this action.", 403));
+        }
         const affected = await PayrollModel.deletePayrollRun(req.params.id);
         if (affected === 0) return next(new ErrorResponse('Payroll period not found', 404));
         sendResponse(res, 200, 'Payroll run deleted successfully');
@@ -228,9 +250,62 @@ const actionPayrollPeriod = async (req, res, next) => {
         if (!action) {
             return next(new ErrorResponse('Please provide action', 400));
         }
+
+        // Dynamic Workflow Authorization Check
+        // Actions: 'submitted', 'verified', 'approved', 'paid', 'rejected'
+        if (action !== 'rejected') {
+            const configs = await PayrollModel.getWorkflowConfig();
+            const activeConfig = configs.find(c => c.level_name === action);
+
+            if (activeConfig) {
+                const userId = req.user.id;
+                const userRole = req.user.role ? req.user.role.toLowerCase() : '';
+                
+                const matchesUser = activeConfig.assigned_to_user_id !== null && activeConfig.assigned_to_user_id === userId;
+                const matchesRole = activeConfig.assigned_to_role !== null && activeConfig.assigned_to_role.toLowerCase() === userRole;
+                const isSuperAdmin = userRole === 'super_admin';
+
+                if (!matchesUser && !matchesRole && !isSuperAdmin) {
+                    return next(new ErrorResponse(`You are not authorized to perform the '${action}' action. Only the assigned user or role (${activeConfig.assigned_to_role || 'Specific User'}) can perform this step.`, 403));
+                }
+            }
+        }
+
         const actionBy = req.user?.employeeId || 999;
         const result = await PayrollModel.actionPayrollPeriod(req.params.id, action, actionBy, remarks);
         sendResponse(res, 200, `Payroll cycle status advanced to ${action}`, result);
+    } catch (e) { next(e); }
+};
+
+const getWorkflowConfig = async (req, res, next) => {
+    try {
+        const data = await PayrollModel.getWorkflowConfig();
+        sendResponse(res, 200, 'Workflow config fetched successfully', data);
+    } catch (e) { next(e); }
+};
+
+const updateWorkflowConfig = async (req, res, next) => {
+    try {
+        const { level_id, assigned_to_user_id, assigned_to_role } = req.body;
+        if (!level_id) {
+            return next(new ErrorResponse('Please provide level_id', 400));
+        }
+        await PayrollModel.updateWorkflowConfig(level_id, assigned_to_user_id, assigned_to_role);
+        sendResponse(res, 200, 'Workflow level updated successfully');
+    } catch (e) { next(e); }
+};
+
+const getWorkflowUsers = async (req, res, next) => {
+    try {
+        const data = await PayrollModel.getWorkflowUsers();
+        sendResponse(res, 200, 'Workflow users fetched successfully', data);
+    } catch (e) { next(e); }
+};
+
+const getWorkflowRoles = async (req, res, next) => {
+    try {
+        const data = await PayrollModel.getWorkflowRoles();
+        sendResponse(res, 200, 'Workflow roles fetched successfully', data);
     } catch (e) { next(e); }
 };
 
@@ -320,5 +395,9 @@ module.exports = {
     getLoanTracker,
     getApprovalLogs,
     getLopDetails,
-    updateDisbursement
+    updateDisbursement,
+    getWorkflowConfig,
+    updateWorkflowConfig,
+    getWorkflowUsers,
+    getWorkflowRoles
 };
