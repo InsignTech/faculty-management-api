@@ -595,6 +595,7 @@ class PayrollModel {
             LEFT JOIN salary_structure ss ON ss.employee_id = e.employee_id AND ss.is_current = 1
             LEFT JOIN employee_bank_account eba ON eba.employee_id = e.employee_id AND eba.is_active = 1
             WHERE e.active = 1
+              AND LOWER(e.employee_name) NOT LIKE '%admin%'
             ORDER BY e.employee_name ASC
         `);
         return rows;
