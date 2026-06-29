@@ -177,14 +177,15 @@ class LeaveRequestModel {
   }
 
   static async updateStatus(id, status, data) {
-    const { approved_by_id, rejection_reason } = data;
+    const { approved_by_id, rejection_reason, substitute_id } = data;
     const [rows] = await pool.execute(
-      'CALL sp_approve_leave(?, ?, ?, ?)',
+      'CALL sp_approve_leave(?, ?, ?, ?, ?)',
       [
         id,
         approved_by_id,
         status,
-        rejection_reason || null
+        rejection_reason || null,
+        substitute_id || null
       ]
     );
     return rows[0][0];
@@ -266,7 +267,7 @@ class LeaveRequestModel {
   }
 
   static async superAdminCreateLeave(data, superAdminEmployeeId) {
-    const { employee_id, leave_type, start_date, end_date, leave_half_type, reason, attachment_path, total_days, check_balance } = data;
+    const { employee_id, leave_type, start_date, end_date, leave_half_type, reason, attachment_path, total_days, check_balance, substitute_employee_id } = data;
     
     const halfType = leave_half_type || 'FullDay';
     const requestedDays = halfType !== 'FullDay' ? 0.5 : (total_days || 0);
@@ -286,39 +287,56 @@ class LeaveRequestModel {
         }
       }
 
-      // Bypassing balance check completely!
-      const [rows] = await conn.execute(
-        'CALL sp_apply_leave(?, ?, ?, ?, ?, ?, ?)',
-        [employee_id, leave_type, start_date, end_date, halfType, reason, attachment_path || null]
+      // Fetch approver configs
+      const [configRows] = await conn.execute(
+        `SELECT 
+            eac.approver_1_id,
+            eac.approver_2_id
+         FROM employee e
+         LEFT JOIN employee_approver_configs eac
+             ON eac.employee_id = e.employee_id AND eac.request_type = 'LEAVE'
+         WHERE e.employee_id = ?`,
+        [employee_id]
       );
-      
-      const result = rows[0][0];
 
-      if (!result || !result.leave_request_id) {
-        throw new Error('Failed to create leave request via database stored procedure.');
-      }
+      const approver1 = configRows[0]?.approver_1_id || null;
+      const approver2 = configRows[0]?.approver_2_id || null;
 
-      const leaveRequestId = result.leave_request_id;
+      // Insert directly to bypass sp_apply_leave validations (like the past month check!)
+      const [insertResult] = await conn.execute(
+        `INSERT INTO leave_requests (
+            employee_id, leave_type, start_date, end_date, total_days,
+            reason, attachment_path, status, applied_on,
+            substitute_employee_id, approver_1_id, approver_2_id, current_level
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, ?, 1)`,
+        [
+          employee_id,
+          leave_type,
+          start_date,
+          end_date,
+          requestedDays,
+          reason,
+          attachment_path || null,
+          'Pending',
+          substitute_employee_id || null,
+          approver1,
+          approver2
+        ]
+      );
 
-      // Correct total_days if necessary
-      if (result && leaveRequestId && (!result.total_days || result.total_days == 0)) {
-         if (halfType !== 'FullDay') {
-            await conn.execute('UPDATE leave_requests SET total_days = 0.5 WHERE leave_request_id = ?', [leaveRequestId]);
-         } else if (total_days > 0) {
-            await conn.execute('UPDATE leave_requests SET total_days = ? WHERE leave_request_id = ?', [total_days, leaveRequestId]);
-         }
-      }
+      const leaveRequestId = insertResult.insertId;
 
       await conn.commit();
 
       // Immediately approve it!
       await conn.execute(
-        'CALL sp_approve_leave(?, ?, ?, ?)',
+        'CALL sp_approve_leave(?, ?, ?, ?, ?)',
         [
           leaveRequestId,
           superAdminEmployeeId,
           'Approved',
-          'Super Admin Direct Bypass Approval'
+          'Super Admin Direct Bypass Approval',
+          null
         ]
       );
 
