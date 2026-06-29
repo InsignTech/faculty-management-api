@@ -363,6 +363,13 @@ const exportExcel = async (req, res, next) => {
     } catch (e) { next(e); }
 };
 
+const getEmployeesConfigStatus = async (req, res, next) => {
+    try {
+        const data = await PayrollModel.getEmployeesConfigStatus();
+        sendResponse(res, 200, 'Employee configuration status fetched successfully', data);
+    } catch (e) { next(e); }
+};
+
 module.exports = {
     exportExcel,
     getPeriods,
@@ -399,5 +406,6 @@ module.exports = {
     getWorkflowConfig,
     updateWorkflowConfig,
     getWorkflowUsers,
-    getWorkflowRoles
+    getWorkflowRoles,
+    getEmployeesConfigStatus
 };
