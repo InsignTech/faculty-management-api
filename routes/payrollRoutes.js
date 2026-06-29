@@ -61,11 +61,11 @@ router.route('/loans/tracker')
 
 // --- Processing Operations ---
 router.route('/periods/:id/run')
-    .post(authorize('super_admin', 'Admin', 'payroll_admin', 'payrolladmin'), payrollController.runPayroll)
-    .delete(authorize('super_admin', 'Admin', 'payroll_admin', 'payrolladmin'), payrollController.deletePayrollRun);
+    .post(payrollController.runPayroll)
+    .delete(payrollController.deletePayrollRun);
 
 router.route('/periods/:id/action')
-    .post(authorize('super_admin', 'Admin', 'Principal'), payrollController.actionPayrollPeriod);
+    .post(payrollController.actionPayrollPeriod);
 
 router.route('/periods/:id/disbursements')
     .get(payrollController.getDisbursements);
@@ -84,5 +84,16 @@ router.route('/periods/:id/export-excel')
 
 router.route('/periods/:id/approval-logs')
     .get(payrollController.getApprovalLogs);
+
+// --- Workflow Config ---
+router.route('/workflow-config')
+    .get(payrollController.getWorkflowConfig)
+    .put(authorize('super_admin', 'Admin'), payrollController.updateWorkflowConfig);
+
+router.route('/workflow-users')
+    .get(authorize('super_admin', 'Admin'), payrollController.getWorkflowUsers);
+
+router.route('/workflow-roles')
+    .get(authorize('super_admin', 'Admin'), payrollController.getWorkflowRoles);
 
 module.exports = router;
