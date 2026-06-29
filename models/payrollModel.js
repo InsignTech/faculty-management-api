@@ -582,6 +582,23 @@ class PayrollModel {
         const [rows] = await pool.execute('SELECT role_id, role FROM app_role ORDER BY role ASC');
         return rows;
     }
+
+    static async getEmployeesConfigStatus() {
+        const [rows] = await pool.execute(`
+            SELECT 
+                e.employee_id,
+                e.employee_code,
+                e.employee_name,
+                CASE WHEN ss.structure_id IS NULL THEN 0 ELSE 1 END as has_salary_structure,
+                CASE WHEN eba.account_id IS NULL THEN 0 ELSE 1 END as has_bank_details
+            FROM employee e
+            LEFT JOIN salary_structure ss ON ss.employee_id = e.employee_id AND ss.is_current = 1
+            LEFT JOIN employee_bank_account eba ON eba.employee_id = e.employee_id AND eba.is_active = 1
+            WHERE e.active = 1
+            ORDER BY e.employee_name ASC
+        `);
+        return rows;
+    }
 }
 
 module.exports = PayrollModel;

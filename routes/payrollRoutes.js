@@ -6,6 +6,9 @@ const { protect, authorize } = require('../middleware/auth');
 // Protect all routes
 router.use(protect);
 
+router.route('/configuration-status')
+    .get(payrollController.getEmployeesConfigStatus);
+
 // --- Periods ---
 router.route('/periods')
     .get(payrollController.getPeriods)
