@@ -24,7 +24,7 @@ const getMyAttendance = async (req, res, next) => {
         // Permission check
         const userRole = req.user.role?.toLowerCase();
         const isAdmin = ['admin', 'super_admin', 'principal'].includes(userRole);
-        
+
         if (!isAdmin && parseInt(targetEmpId) !== parseInt(loggedInEmpId)) {
             const isSub = await EmployeeModel.isSubordinate(loggedInEmpId, targetEmpId);
             if (!isSub) {
@@ -59,7 +59,7 @@ const getMyAttendanceSummary = async (req, res, next) => {
 
         const month = req.query.month || new Date().getMonth() + 1;
         const year = req.query.year || new Date().getFullYear();
-        
+
         // Detailed Summary Query
         const [statsRows] = await pool.execute(
             `SELECT 
@@ -123,7 +123,7 @@ const getIrregularDays = async (req, res, next) => {
 
         const month = req.query.month || new Date().getMonth() + 1;
         const year = req.query.year || new Date().getFullYear();
-        
+
         const irregular = await AttendanceModel.getIrregularAttendance(employeeId, month, year);
         sendResponse(res, 200, 'Irregular attendance days fetched', irregular);
     } catch (error) { next(error); }
@@ -133,16 +133,16 @@ const requestAdjustment = async (req, res, next) => {
     try {
         const employeeId = req.user.employeeId;
         if (!employeeId) return next(new ErrorResponse('User is not associated with an employee record', 400, 'MISSING_EMPLOYEE_RECORD'));
-        
-        const { 
-            type, date, from_date, to_date, 
-            requested_in_time, requested_out_time, punch_time, 
-            regularization_shift_type, 
-            reason, remarks, 
+
+        const {
+            type, date, from_date, to_date,
+            requested_in_time, requested_out_time, punch_time,
+            regularization_shift_type,
+            reason, remarks,
             attachment_path,
             substitute_employee_id
         } = req.body;
-        
+
         // Validation: require type
         if (!type) {
             return next(new ErrorResponse('type is required', 400));
@@ -156,20 +156,20 @@ const requestAdjustment = async (req, res, next) => {
             return next(new ErrorResponse('date or from_date is required for On-Duty', 400));
         }
 
-        const result = await AttendanceModel.requestAdjustment({ 
-            employee_id: employeeId, 
-            type, 
-            date, 
-            from_date, 
-            to_date, 
-            requested_in_time: requested_in_time || punch_time, 
+        const result = await AttendanceModel.requestAdjustment({
+            employee_id: employeeId,
+            type,
+            date,
+            from_date,
+            to_date,
+            requested_in_time: requested_in_time || punch_time,
             requested_out_time,
             regularization_shift_type,
-            reason: reason || remarks, 
+            reason: reason || remarks,
             attachment_path,
             substitute_employee_id: substitute_employee_id || null
         });
-        
+
         sendResponse(res, 201, 'Adjustment request submitted successfully', result);
     } catch (error) { next(error); }
 };
@@ -178,10 +178,10 @@ const getMyAdjustments = async (req, res, next) => {
     try {
         const employeeId = req.user.employeeId;
         if (!employeeId) return next(new ErrorResponse('User is not associated with an employee record', 400, 'MISSING_EMPLOYEE_RECORD'));
-        
+
         const month = req.query.month || null;
         const year = req.query.year || null;
-        
+
         const adjustments = await AttendanceModel.getEmployeeAdjustments(employeeId, month, year);
         sendResponse(res, 200, 'Adjustment history fetched', adjustments);
     } catch (error) { next(error); }
@@ -200,8 +200,8 @@ const getPendingAdjustments = async (req, res, next) => {
         }
 
         const status = req.query.status || 'Pending';
-        const page   = parseInt(req.query.page)  || 1;
-        const limit  = parseInt(req.query.limit) || 10;
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 10;
 
         const result = await AttendanceModel.getApprovalQueue({
             isAdmin,
@@ -231,7 +231,7 @@ const approveAdjustment = async (req, res, next) => {
         // Permission check
         const userRole = req.user.role?.toLowerCase();
         const isAdmin = ['super_admin'].includes(userRole);
-        
+
         if (!isAdmin) {
             const isDesignatedApprover = adj.approver_1_id === approverId || adj.approver_2_id === approverId;
             if (!isDesignatedApprover) {
@@ -263,7 +263,7 @@ const rejectAdjustment = async (req, res, next) => {
         // Permission check
         const userRole = req.user.role?.toLowerCase();
         const isAdmin = ['super_admin'].includes(userRole);
-        
+
         if (!isAdmin) {
             const isDesignatedApprover = adj.approver_1_id === approverId || adj.approver_2_id === approverId;
             if (!isDesignatedApprover) {
@@ -284,11 +284,11 @@ const deleteAdjustment = async (req, res, next) => {
         const { id } = req.params;
         const employeeId = req.user.employeeId;
         const result = await AttendanceModel.deleteAdjustment(id, employeeId);
-        
+
         if (result.affected_rows === 0) {
             return next(new ErrorResponse('Adjustment not found or is already processed', 404));
         }
-        
+
         sendResponse(res, 200, 'Adjustment request deleted successfully', result);
     } catch (error) { next(error); }
 };
@@ -326,17 +326,41 @@ const uploadMachineLogs = async (req, res, next) => {
     }
 };
 
+const uploadMachineLogsMesEdathala = async (req, res, next) => {
+    let syncId = null;
+    const logs = req.body; // Expecting array of { employee_id, punch_time }
+
+    if (!Array.isArray(logs)) {
+        return next(new ErrorResponse('Expected an array of attendance records', 400));
+    }
+
+    try {
+
+        // 2. Perform bulk insertion (INSERT IGNORE)
+        const affectedRows = await AttendanceModel.insertMachineLogsMesEdathala(logs);
+
+        sendResponse(res, 201, `Synchronized ${affectedRows} new punch records from ${logs.length} entries.`, {
+            total_received: logs.length,
+            new_records: affectedRows,
+            sync_id: syncId
+        });
+    } catch (error) {
+        console.log(error)
+        next(error);
+    }
+};
+
 const isPreviousMonth = (dateStr) => {
     if (!dateStr) return false;
     const targetDate = new Date(dateStr);
     const currentDate = new Date();
-    
+
     const targetYear = targetDate.getFullYear();
     const targetMonth = targetDate.getMonth();
-    
+
     const currentYear = currentDate.getFullYear();
     const currentMonth = currentDate.getMonth();
-    
+
     if (targetYear < currentYear) return true;
     if (targetYear === currentYear && targetMonth < currentMonth) return true;
     return false;
@@ -398,5 +422,6 @@ module.exports = {
     deleteAdjustment,
     uploadMachineLogs,
     superAdminUpdateAttendance,
-    superAdminApplyAdjustment
+    superAdminApplyAdjustment,
+    uploadMachineLogsMesEdathala
 };

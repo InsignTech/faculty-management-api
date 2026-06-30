@@ -1,10 +1,10 @@
 const express = require('express');
-const { 
-    processAttendanceLogs, 
-    getMyAttendance, 
+const {
+    processAttendanceLogs,
+    getMyAttendance,
     getMyAttendanceSummary,
     getIrregularDays,
-    requestAdjustment, 
+    requestAdjustment,
     getMyAdjustments,
     getPendingAdjustments,
     approveAdjustment,
@@ -12,7 +12,8 @@ const {
     deleteAdjustment,
     uploadMachineLogs,
     superAdminUpdateAttendance,
-    superAdminApplyAdjustment
+    superAdminApplyAdjustment,
+    uploadMachineLogsMesEdathala
 } = require('../controllers/attendanceController');
 const { protect, authorize, protectMachine } = require('../middleware/auth');
 const router = express.Router();
@@ -20,6 +21,7 @@ const router = express.Router();
 // Machine Sync Route (uses static API Key)
 router.post('/machine-logs', protectMachine, uploadMachineLogs);
 
+router.post('/machine-logs-mesedathala', uploadMachineLogsMesEdathala);
 // All other routes are protected by standard JWT
 router.use(protect);
 
@@ -27,7 +29,7 @@ router.use(protect);
 router.put('/super-admin/update-attendance', authorize('super_admin', 'principal', 'Super Admin', 'Principal'), superAdminUpdateAttendance);
 router.post('/super-admin/apply-adjustment', authorize('super_admin', 'principal', 'Super Admin', 'Principal'), superAdminApplyAdjustment);
 
-router.post('/process-logs', authorize('Admin'), processAttendanceLogs); 
+router.post('/process-logs', authorize('Admin'), processAttendanceLogs);
 
 router.get('/my-attendance', getMyAttendance);
 router.get('/my-summary', getMyAttendanceSummary);
