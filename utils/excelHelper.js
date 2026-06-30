@@ -30,7 +30,7 @@ async function generateExcelStatement(periodId) {
         WHERE sd.period_id = ?
     `, [periodId]);
 
-    const templatePath = path.join(__dirname, '..', '..', 'APRIL 2026 -1.xlsx');
+    const templatePath = path.join(__dirname, '..', 'APRIL 2026 -1.xlsx');
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.readFile(templatePath);
 
