@@ -12,7 +12,7 @@ router.route('/configuration-status')
 // --- Periods ---
 router.route('/periods')
     .get(payrollController.getPeriods)
-    .post(authorize('super_admin', 'Admin', 'payroll_admin', 'payrolladmin'), payrollController.createPeriod);
+    .post(payrollController.createPeriod);
 
 router.route('/periods/:id')
     .put(authorize('super_admin', 'Admin', 'Principal'), payrollController.updatePeriod);
