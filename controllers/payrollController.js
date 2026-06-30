@@ -17,6 +17,29 @@ const createPeriod = async (req, res, next) => {
         if (!month || !year || !start_date || !end_date) {
             return next(new ErrorResponse('Please provide month, year, start_date, and end_date', 400));
         }
+
+        // Authorize super_admin, Admin, payroll_admin, payrolladmin OR Level 1 workflow user/role
+        const userRole = req.user.role ? req.user.role.toLowerCase() : '';
+        const allowedStaticRoles = ['super_admin', 'admin', 'payroll_admin', 'payrolladmin'];
+        let isAuthorized = allowedStaticRoles.includes(userRole);
+
+        if (!isAuthorized) {
+            // Check Level 1 configuration dynamically
+            const workflowConfig = await PayrollModel.getWorkflowConfig();
+            const level1 = workflowConfig.find(c => c.level_number === 1);
+            if (level1) {
+                const matchesUser = level1.assigned_to_user_id !== null && level1.assigned_to_user_id === req.user.id;
+                const matchesRole = level1.assigned_to_role !== null && level1.assigned_to_role.toLowerCase() === userRole;
+                if (matchesUser || matchesRole) {
+                    isAuthorized = true;
+                }
+            }
+        }
+
+        if (!isAuthorized) {
+            return next(new ErrorResponse(`User role ${req.user.role} is not authorized to access this route`, 403, 'FORBIDDEN'));
+        }
+
         const insertId = await PayrollModel.createPeriod(req.body);
         sendResponse(res, 201, 'Period created successfully', { period_id: insertId });
     } catch (e) { next(e); }
