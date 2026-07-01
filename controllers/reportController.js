@@ -83,7 +83,81 @@ const exportAttendanceReport = async (req, res, next) => {
     } catch (error) { next(error); }
 };
 
+const getDeductionsReport = async (req, res, next) => {
+    try {
+        const { startDate, endDate, departmentId, search, filterType, page = 1, limit = 50 } = req.query;
+
+        if (!startDate || !endDate) {
+            return next(new ErrorResponse('Start and End dates are required', 400));
+        }
+
+        const userRole = (req.user.role || '').toLowerCase();
+        const isAdmin = ['admin', 'principal', 'super_admin'].includes(userRole);
+        const reportData = await ReportModel.getDeductionsReport(req.user.employeeId, isAdmin, {
+            startDate, endDate, departmentId, search, filterType
+        });
+
+        const startIndex = (page - 1) * limit;
+        const paginatedData = reportData.slice(startIndex, startIndex + parseInt(limit));
+
+        sendResponse(res, 200, 'Deductions report fetched successfully', {
+            data: paginatedData,
+            totalRows: reportData.length,
+            currentPage: parseInt(page),
+            totalPages: Math.ceil(reportData.length / limit)
+        });
+    } catch (error) { next(error); }
+};
+
+const exportDeductionsReport = async (req, res, next) => {
+    try {
+        if (!XLSX) {
+            return next(new ErrorResponse('Excel export library (xlsx) is not installed on the server.', 500));
+        }
+
+        const { startDate, endDate, departmentId, search, filterType } = req.query;
+
+        if (!startDate || !endDate) {
+            return next(new ErrorResponse('Start and End dates are required', 400));
+        }
+
+        const userRole = (req.user.role || '').toLowerCase();
+        const isAdmin = ['admin', 'principal', 'super_admin'].includes(userRole);
+        const reportData = await ReportModel.getDeductionsReport(req.user.employeeId, isAdmin, {
+            startDate, endDate, departmentId, search, filterType
+        });
+
+        const excelData = reportData.map(row => ({
+            'Date': row.date,
+            'Emp Code': row.employee_code,
+            'Name': row.employee_name,
+            'Department': row.department,
+            'Attendance Status': row.attendance_status,
+            'Deduction (Days)': row.deduction_days,
+            'Applied Request': row.request_type + (row.request_details ? ` (${row.request_details})` : ''),
+            'Applied Date': row.applied_on ? new Date(row.applied_on).toLocaleString('en-GB') : 'N/A',
+            'Request Status': row.request_status,
+            'Level 1 Approver': row.approver_1_name,
+            'Level 2 Approver': row.approver_2_name,
+            'Actioned By (Final)': row.approved_by_name
+        }));
+
+        const wb = XLSX.utils.book_new();
+        const ws = XLSX.utils.json_to_sheet(excelData);
+        XLSX.utils.book_append_sheet(wb, ws, 'Deductions Report');
+
+        const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename=Deductions_Report_${startDate}_to_${endDate}.xlsx`);
+        res.send(buf);
+
+    } catch (error) { next(error); }
+};
+
 module.exports = {
     getAttendanceReport,
-    exportAttendanceReport
+    exportAttendanceReport,
+    getDeductionsReport,
+    exportDeductionsReport
 };
