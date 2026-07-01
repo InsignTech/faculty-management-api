@@ -466,31 +466,100 @@ class PayrollModel {
         const lop_deduction = Math.round((gross_salary / 30) * parseFloat(lop_days) * 100) / 100;
         const payable_amount = Math.max(0, gross_salary - lop_deduction);
 
+        // Fetch employee's deduction configs to check applicability and overrides
+        const [configRows] = await pool.execute(
+            `SELECT drm.deduction_code, edc.is_applicable, edc.override_amount
+             FROM employee_deduction_config edc
+             JOIN deduction_rule_master drm ON edc.rule_id = drm.rule_id
+             WHERE edc.employee_id = ?`,
+            [old.employee_id]
+        );
+        const configs = {};
+        for (const row of configRows) {
+            configs[row.deduction_code] = {
+                is_applicable: row.is_applicable,
+                override_amount: row.override_amount
+            };
+        }
+
+        // Helper to check if a deduction is applicable (only returns true if explicitly is_applicable === 1 in configs)
+        const isApplicable = (code) => {
+            return configs[code]?.is_applicable === 1;
+        };
+
+        // Helper to get override amount if set
+        const getOverride = (code) => {
+            return configs[code] ? configs[code].override_amount : null;
+        };
+
         // EPF Recalculation
-        const hasEPF = (oldDec.EPF > 0 || oldDec.EPF_rate > 0);
+        let epf_amount = 0;
         const epf_rate = oldDec.EPF_rate || 12.0;
-        // EPF base is pro-rated earned basic pay, capped at 15000
         const epf_base = Math.min(15000, Math.round(parseFloat(basic_pay) * (1 - (parseFloat(lop_days) / 30)) * 100) / 100);
-        const epf_amount = hasEPF ? Math.round(epf_base * (epf_rate / 100) * 100) / 100 : 0;
+        if (isApplicable('EPF')) {
+            const epfOverride = getOverride('EPF');
+            if (epfOverride !== null) {
+                epf_amount = parseFloat(epfOverride);
+            } else {
+                epf_amount = Math.round(epf_base * (epf_rate / 100) * 100) / 100;
+            }
+        }
 
         // ESI Recalculation
-        const hasESI = (oldDec.ESI > 0 || oldDec.ESI_rate > 0);
+        let esi_amount = 0;
         const esi_rate = oldDec.ESI_rate || 0.75;
         const esi_base = payable_amount;
-        const esi_amount = (hasESI && esi_base <= 21000) ? Math.round(esi_base * (esi_rate / 100) * 100) / 100 : 0;
+        if (isApplicable('ESI')) {
+            const esiOverride = getOverride('ESI');
+            if (esiOverride !== null) {
+                esi_amount = parseFloat(esiOverride);
+            } else {
+                esi_amount = (esi_base <= 21000) ? Math.round(esi_base * (esi_rate / 100) * 100) / 100 : 0;
+            }
+        }
+
+        // TDS Recalculation
+        let final_tds = 0;
+        if (isApplicable('TDS')) {
+            const tdsOverride = getOverride('TDS');
+            if (tdsOverride !== null) {
+                final_tds = parseFloat(tdsOverride);
+            } else {
+                final_tds = parseFloat(tds || 0);
+            }
+        }
 
         // Profession Tax Slab lookup
-        const [ptRows] = await pool.execute(
-            `SELECT COALESCE(monthly_tax, 0) AS pt_amount
-             FROM profession_tax_slab
-             WHERE ? >= min_salary AND (max_salary IS NULL OR ? <= max_salary)
-             ORDER BY min_salary DESC LIMIT 1`,
-            [payable_amount, payable_amount]
-        );
-        const pt_amount = ptRows[0]?.pt_amount || 0;
+        let pt_amount = 0;
+        if (isApplicable('PT')) {
+            const ptOverride = getOverride('PT');
+            if (ptOverride !== null) {
+                pt_amount = parseFloat(ptOverride);
+            } else {
+                const [ptRows] = await pool.execute(
+                    `SELECT COALESCE(monthly_tax, 0) AS pt_amount
+                     FROM profession_tax_slab
+                     WHERE ? >= min_salary AND (max_salary IS NULL OR ? <= max_salary)
+                     ORDER BY min_salary DESC LIMIT 1`,
+                    [payable_amount, payable_amount]
+                );
+                pt_amount = ptRows[0]?.pt_amount || 0;
+            }
+        }
+
+        // Bus Fee Recalculation
+        let final_bus_fee = 0;
+        if (isApplicable('BUS_FEE')) {
+            const busFeeOverride = getOverride('BUS_FEE');
+            if (busFeeOverride !== null) {
+                final_bus_fee = parseFloat(busFeeOverride);
+            } else {
+                final_bus_fee = parseFloat(bus_fee || 0);
+            }
+        }
 
         // Total Deductions
-        const total_deduction = epf_amount + esi_amount + parseFloat(tds || 0) + parseFloat(pt_amount || 0) + parseFloat(loan_emi || 0) + parseFloat(bus_fee || 0);
+        const total_deduction = epf_amount + esi_amount + final_tds + pt_amount + parseFloat(loan_emi || 0) + final_bus_fee;
 
         const net_salary = Math.max(0, payable_amount - total_deduction);
 
@@ -503,16 +572,21 @@ class PayrollModel {
             ESI: esi_amount,
             ESI_base: esi_base,
             ESI_rate: esi_rate,
-            TDS: parseFloat(tds || 0),
+            TDS: final_tds,
             ProfessionTax: pt_amount,
             LoanEMI: parseFloat(loan_emi || 0),
-            BusFee: parseFloat(bus_fee || 0),
+            BusFee: final_bus_fee,
             LOP_days: parseFloat(lop_days),
             LOP_deduction: lop_deduction,
             Gross_salary: gross_salary,
             Basic_pay: parseFloat(basic_pay),
             Payable_amount: payable_amount,
-            Days_in_period: 30
+            Days_in_period: 30,
+            isEPFApplicable: isApplicable('EPF') ? 1 : 0,
+            isESIApplicable: isApplicable('ESI') ? 1 : 0,
+            isTDSApplicable: isApplicable('TDS') ? 1 : 0,
+            isPTApplicable: isApplicable('PT') ? 1 : 0,
+            isBusFeeApplicable: isApplicable('BUS_FEE') ? 1 : 0
         });
 
         // Update database row
