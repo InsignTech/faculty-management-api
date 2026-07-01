@@ -7,12 +7,14 @@ const MONTH_NAMES = [
     'JULY', 'AUGUST', 'SEPTEMBER', 'OCTOBER', 'NOVEMBER', 'DECEMBER'
 ];
 
-async function generateExcelStatement(periodId) {
+async function generateExcelStatement(periodId, sortBy = 'id') {
     const [periods] = await pool.execute('SELECT * FROM payroll_period WHERE period_id = ?', [periodId]);
     if (periods.length === 0) throw new Error('Payroll period not found');
     const period = periods[0];
     const monthStr = MONTH_NAMES[period.month - 1];
     const yearStr = period.year.toString();
+
+    const orderClause = sortBy === 'name' ? 'e.employee_name ASC' : 'sd.employee_id ASC';
 
     const [disbursements] = await pool.execute(`
         SELECT sd.*, 
@@ -28,6 +30,7 @@ async function generateExcelStatement(periodId) {
         LEFT JOIN department d ON e.department_id = d.department_id
         LEFT JOIN designation des ON e.designation_id = des.designation_id
         WHERE sd.period_id = ?
+        ORDER BY ${orderClause}
     `, [periodId]);
 
     const templatePath = path.join(__dirname, '..', 'APRIL 2026 -1.xlsx');

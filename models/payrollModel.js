@@ -299,7 +299,8 @@ class PayrollModel {
         return rows;
     }
 
-    static async getStatement(periodId) {
+    static async getStatement(periodId, sortBy = 'id') {
+        const orderClause = sortBy === 'name' ? 'e.employee_name ASC' : 'sd.employee_id ASC';
         const [disbursements] = await pool.execute(
             `SELECT sd.*, 
                     e.employee_name, 
@@ -315,7 +316,8 @@ class PayrollModel {
              LEFT JOIN department d ON e.department_id = d.department_id
              LEFT JOIN designation des ON e.designation_id = des.designation_id
              LEFT JOIN employee_bank_account eba ON sd.employee_id = eba.employee_id AND eba.is_primary = 1 AND eba.is_active = 1
-             WHERE sd.period_id = ?`,
+             WHERE sd.period_id = ?
+             ORDER BY ${orderClause}`,
             [periodId]
         );
         return disbursements;
