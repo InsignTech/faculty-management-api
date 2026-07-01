@@ -157,12 +157,12 @@ BEGIN
             
             -- EPF Calculation
             SET v_epf_amount = 0;
-            -- Check if EPF is configured and applicable for employee
-            IF NOT EXISTS (SELECT 1 FROM employee_deduction_config edc 
+            -- Check if EPF is configured and applicable for employee (must exist and be active)
+            IF EXISTS (SELECT 1 FROM employee_deduction_config edc 
                            JOIN deduction_rule_master drm ON edc.rule_id = drm.rule_id
-                           WHERE edc.employee_id = v_emp_id AND drm.deduction_code = 'EPF' AND edc.is_applicable = 0) 
+                           WHERE edc.employee_id = v_emp_id AND drm.deduction_code = 'EPF' AND edc.is_applicable = 1) 
                AND EXISTS (SELECT 1 FROM deduction_rule_master WHERE deduction_code = 'EPF' AND is_active = 1) THEN
-               
+                
                 BEGIN
                     DECLARE CONTINUE HANDLER FOR NOT FOUND BEGIN END;
                     SELECT COALESCE(calc_basis, 'basic_pay'), COALESCE(rate, 12.0)
@@ -182,24 +182,24 @@ BEGIN
                     SET v_epf_base = 15000.00;
                 END IF;
                 SET v_epf_amount = ROUND(v_epf_base * (v_epf_rule_rate / 100), 2);
+                
+                -- Apply custom overrides if set in employee_deduction_config
+                BEGIN
+                    DECLARE CONTINUE HANDLER FOR NOT FOUND BEGIN END;
+                    SELECT edc.override_amount
+                    INTO v_epf_amount
+                    FROM employee_deduction_config edc
+                    JOIN deduction_rule_master drm ON edc.rule_id = drm.rule_id
+                    WHERE edc.employee_id = v_emp_id AND drm.deduction_code = 'EPF' AND edc.is_applicable = 1 AND edc.override_amount IS NOT NULL
+                    LIMIT 1;
+                END;
             END IF;
-            
-            -- Apply custom overrides if set in employee_deduction_config
-            BEGIN
-                DECLARE CONTINUE HANDLER FOR NOT FOUND BEGIN END;
-                SELECT COALESCE(edc.override_amount, v_epf_amount)
-                INTO v_epf_amount
-                FROM employee_deduction_config edc
-                JOIN deduction_rule_master drm ON edc.rule_id = drm.rule_id
-                WHERE edc.employee_id = v_emp_id AND drm.deduction_code = 'EPF' AND edc.is_applicable = 1
-                LIMIT 1;
-            END;
             
             -- ESI Calculation
             SET v_esi_amount = 0;
-            IF NOT EXISTS (SELECT 1 FROM employee_deduction_config edc 
+            IF EXISTS (SELECT 1 FROM employee_deduction_config edc 
                            JOIN deduction_rule_master drm ON edc.rule_id = drm.rule_id
-                           WHERE edc.employee_id = v_emp_id AND drm.deduction_code = 'ESI' AND edc.is_applicable = 0)
+                           WHERE edc.employee_id = v_emp_id AND drm.deduction_code = 'ESI' AND edc.is_applicable = 1)
                AND EXISTS (SELECT 1 FROM deduction_rule_master WHERE deduction_code = 'ESI' AND is_active = 1) THEN
                 
                 BEGIN
@@ -221,39 +221,70 @@ BEGIN
                 IF v_esi_base <= 21000.00 THEN
                     SET v_esi_amount = ROUND(v_esi_base * (v_esi_rule_rate / 100), 2);
                 END IF;
+                
+                -- Apply custom overrides if set in employee_deduction_config
+                BEGIN
+                    DECLARE CONTINUE HANDLER FOR NOT FOUND BEGIN END;
+                    SELECT edc.override_amount
+                    INTO v_esi_amount
+                    FROM employee_deduction_config edc
+                    JOIN deduction_rule_master drm ON edc.rule_id = drm.rule_id
+                    WHERE edc.employee_id = v_emp_id AND drm.deduction_code = 'ESI' AND edc.is_applicable = 1 AND edc.override_amount IS NOT NULL
+                    LIMIT 1;
+                END;
             END IF;
             
-            BEGIN
-                DECLARE CONTINUE HANDLER FOR NOT FOUND BEGIN END;
-                SELECT COALESCE(edc.override_amount, v_esi_amount)
-                INTO v_esi_amount
-                FROM employee_deduction_config edc
-                JOIN deduction_rule_master drm ON edc.rule_id = drm.rule_id
-                WHERE edc.employee_id = v_emp_id AND drm.deduction_code = 'ESI' AND edc.is_applicable = 1
-                LIMIT 1;
-            END;
-            
             -- TDS Calculation
-            BEGIN
-                DECLARE CONTINUE HANDLER FOR NOT FOUND BEGIN END;
-                SELECT COALESCE(tds_override_amount, 0)
-                INTO v_tds_amount
-                FROM employee_tds_config
-                WHERE employee_id = v_emp_id AND financial_year = CONCAT(v_year, '-', v_year+1)
-                LIMIT 1;
-            END;
+            SET v_tds_amount = 0;
+            IF EXISTS (SELECT 1 FROM employee_deduction_config edc 
+                           JOIN deduction_rule_master drm ON edc.rule_id = drm.rule_id
+                           WHERE edc.employee_id = v_emp_id AND drm.deduction_code = 'TDS' AND edc.is_applicable = 1) THEN
+                BEGIN
+                    DECLARE CONTINUE HANDLER FOR NOT FOUND BEGIN END;
+                    SELECT COALESCE(tds_override_amount, 0)
+                    INTO v_tds_amount
+                    FROM employee_tds_config
+                    WHERE employee_id = v_emp_id AND financial_year = CONCAT(v_year, '-', v_year+1)
+                    LIMIT 1;
+                END;
+                
+                BEGIN
+                    DECLARE CONTINUE HANDLER FOR NOT FOUND BEGIN END;
+                    SELECT edc.override_amount
+                    INTO v_tds_amount
+                    FROM employee_deduction_config edc
+                    JOIN deduction_rule_master drm ON edc.rule_id = drm.rule_id
+                    WHERE edc.employee_id = v_emp_id AND drm.deduction_code = 'TDS' AND edc.is_applicable = 1 AND edc.override_amount IS NOT NULL
+                    LIMIT 1;
+                END;
+            END IF;
             
             -- Profession Tax (Slabs)
-            BEGIN
-                DECLARE CONTINUE HANDLER FOR NOT FOUND BEGIN END;
-                SELECT COALESCE(monthly_tax, 0)
-                INTO v_pt_amount
-                FROM profession_tax_slab
-                WHERE v_payable_amount >= min_salary AND (max_salary IS NULL OR v_payable_amount <= max_salary)
-                  AND (effective_to IS NULL OR effective_to >= v_start_date)
-                ORDER BY min_salary DESC
-                LIMIT 1;
-            END;
+            SET v_pt_amount = 0;
+            IF EXISTS (SELECT 1 FROM employee_deduction_config edc 
+                           JOIN deduction_rule_master drm ON edc.rule_id = drm.rule_id
+                           WHERE edc.employee_id = v_emp_id AND drm.deduction_code = 'PT' AND edc.is_applicable = 1) THEN
+                BEGIN
+                    DECLARE CONTINUE HANDLER FOR NOT FOUND BEGIN END;
+                    SELECT COALESCE(monthly_tax, 0)
+                    INTO v_pt_amount
+                    FROM profession_tax_slab
+                    WHERE v_payable_amount >= min_salary AND (max_salary IS NULL OR v_payable_amount <= max_salary)
+                      AND (effective_to IS NULL OR effective_to >= v_start_date)
+                    ORDER BY min_salary DESC
+                    LIMIT 1;
+                END;
+                
+                BEGIN
+                    DECLARE CONTINUE HANDLER FOR NOT FOUND BEGIN END;
+                    SELECT edc.override_amount
+                    INTO v_pt_amount
+                    FROM employee_deduction_config edc
+                    JOIN deduction_rule_master drm ON edc.rule_id = drm.rule_id
+                    WHERE edc.employee_id = v_emp_id AND drm.deduction_code = 'PT' AND edc.is_applicable = 1 AND edc.override_amount IS NOT NULL
+                    LIMIT 1;
+                END;
+            END IF;
             
             -- Loan / Salary Advance Deduction
             BEGIN
@@ -301,7 +332,12 @@ BEGIN
                 'Gross_salary', v_gross_salary,
                 'Basic_pay', v_basic_pay,
                 'Payable_amount', v_payable_amount,
-                'Days_in_period', v_days_in_period
+                'Days_in_period', v_days_in_period,
+                'isEPFApplicable', EXISTS (SELECT 1 FROM employee_deduction_config edc JOIN deduction_rule_master drm ON edc.rule_id = drm.rule_id WHERE edc.employee_id = v_emp_id AND drm.deduction_code = 'EPF' AND edc.is_applicable = 1),
+                'isESIApplicable', EXISTS (SELECT 1 FROM employee_deduction_config edc JOIN deduction_rule_master drm ON edc.rule_id = drm.rule_id WHERE edc.employee_id = v_emp_id AND drm.deduction_code = 'ESI' AND edc.is_applicable = 1),
+                'isTDSApplicable', EXISTS (SELECT 1 FROM employee_deduction_config edc JOIN deduction_rule_master drm ON edc.rule_id = drm.rule_id WHERE edc.employee_id = v_emp_id AND drm.deduction_code = 'TDS' AND edc.is_applicable = 1),
+                'isPTApplicable', EXISTS (SELECT 1 FROM employee_deduction_config edc JOIN deduction_rule_master drm ON edc.rule_id = drm.rule_id WHERE edc.employee_id = v_emp_id AND drm.deduction_code = 'PT' AND edc.is_applicable = 1),
+                'isBusFeeApplicable', EXISTS (SELECT 1 FROM employee_deduction_config edc JOIN deduction_rule_master drm ON edc.rule_id = drm.rule_id WHERE edc.employee_id = v_emp_id AND drm.deduction_code = 'BUS_FEE' AND edc.is_applicable = 1)
             );
             
             -- Insert into salary_disbursement
