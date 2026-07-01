@@ -32,24 +32,25 @@ class PayrollModel {
     }
 
     static async createDeductionRule(data) {
-        const { organization_id, deduction_code, deduction_name, calc_type, rate, calc_basis, eligibility_ceiling, wage_ceiling, fixed_amount, is_statutory, is_active, display_order, notes } = data;
+        const { organization_id, deduction_code, deduction_name, calc_type, rate, calc_basis, eligibility_ceiling, wage_ceiling, fixed_amount, is_statutory, is_active, display_order, notes, applicable_months, projection_multiplier } = data;
         const [result] = await pool.execute(
             `INSERT INTO deduction_rule_master 
-             (organization_id, deduction_code, deduction_name, calc_type, rate, calc_basis, eligibility_ceiling, wage_ceiling, fixed_amount, is_statutory, is_active, display_order, notes)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [organization_id || 1, deduction_code, deduction_name, calc_type, rate || null, calc_basis || null, eligibility_ceiling || null, wage_ceiling || null, fixed_amount || null, is_statutory || 0, is_active || 1, display_order || 0, notes || null]
+             (organization_id, deduction_code, deduction_name, calc_type, rate, calc_basis, eligibility_ceiling, wage_ceiling, fixed_amount, is_statutory, is_active, display_order, notes, applicable_months, projection_multiplier)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [organization_id || 1, deduction_code, deduction_name, calc_type, rate || null, calc_basis || null, eligibility_ceiling || null, wage_ceiling || null, fixed_amount || null, is_statutory || 0, is_active || 1, display_order || 0, notes || null, applicable_months || null, projection_multiplier || 1]
         );
         return result.insertId;
     }
 
     static async updateDeductionRule(id, data) {
-        const { deduction_name, calc_type, rate, calc_basis, eligibility_ceiling, wage_ceiling, fixed_amount, is_statutory, is_active, display_order, notes } = data;
+        const { deduction_name, calc_type, rate, calc_basis, eligibility_ceiling, wage_ceiling, fixed_amount, is_statutory, is_active, display_order, notes, applicable_months, projection_multiplier } = data;
         const [result] = await pool.execute(
             `UPDATE deduction_rule_master SET 
                 deduction_name = ?, calc_type = ?, rate = ?, calc_basis = ?, eligibility_ceiling = ?, 
-                wage_ceiling = ?, fixed_amount = ?, is_statutory = ?, is_active = ?, display_order = ?, notes = ?
+                wage_ceiling = ?, fixed_amount = ?, is_statutory = ?, is_active = ?, display_order = ?, notes = ?,
+                applicable_months = ?, projection_multiplier = ?
              WHERE rule_id = ?`,
-            [deduction_name, calc_type, rate || null, calc_basis || null, eligibility_ceiling || null, wage_ceiling || null, fixed_amount || null, is_statutory || 0, is_active || 1, display_order || 0, notes || null, id]
+            [deduction_name, calc_type, rate || null, calc_basis || null, eligibility_ceiling || null, wage_ceiling || null, fixed_amount || null, is_statutory || 0, is_active || 1, display_order || 0, notes || null, applicable_months || null, projection_multiplier || 1, id]
         );
         return result.affectedRows;
     }
@@ -299,7 +300,8 @@ class PayrollModel {
         return rows;
     }
 
-    static async getStatement(periodId) {
+    static async getStatement(periodId, sortBy = 'id') {
+        const orderClause = sortBy === 'name' ? 'e.employee_name ASC' : 'sd.employee_id ASC';
         const [disbursements] = await pool.execute(
             `SELECT sd.*, 
                     e.employee_name, 
@@ -315,7 +317,8 @@ class PayrollModel {
              LEFT JOIN department d ON e.department_id = d.department_id
              LEFT JOIN designation des ON e.designation_id = des.designation_id
              LEFT JOIN employee_bank_account eba ON sd.employee_id = eba.employee_id AND eba.is_primary = 1 AND eba.is_active = 1
-             WHERE sd.period_id = ?`,
+             WHERE sd.period_id = ?
+             ORDER BY ${orderClause}`,
             [periodId]
         );
         return disbursements;
@@ -466,9 +469,13 @@ class PayrollModel {
         const lop_deduction = Math.round((gross_salary / 30) * parseFloat(lop_days) * 100) / 100;
         const payable_amount = Math.max(0, gross_salary - lop_deduction);
 
+        // Fetch current month of the period
+        const [periodRows] = await pool.execute('SELECT month FROM payroll_period WHERE period_id = ?', [old.period_id]);
+        const currentMonth = periodRows[0]?.month || new Date().getMonth() + 1;
+
         // Fetch employee's deduction configs to check applicability and overrides
         const [configRows] = await pool.execute(
-            `SELECT drm.deduction_code, edc.is_applicable, edc.override_amount
+            `SELECT drm.deduction_code, edc.is_applicable, edc.override_amount, drm.applicable_months, drm.projection_multiplier
              FROM employee_deduction_config edc
              JOIN deduction_rule_master drm ON edc.rule_id = drm.rule_id
              WHERE edc.employee_id = ?`,
@@ -478,18 +485,31 @@ class PayrollModel {
         for (const row of configRows) {
             configs[row.deduction_code] = {
                 is_applicable: row.is_applicable,
-                override_amount: row.override_amount
+                override_amount: row.override_amount,
+                applicable_months: row.applicable_months,
+                projection_multiplier: row.projection_multiplier
             };
         }
 
-        // Helper to check if a deduction is applicable (only returns true if explicitly is_applicable === 1 in configs)
+        // Helper to check if a deduction is applicable (only returns true if explicitly is_applicable === 1 in configs and matches applicable_months)
         const isApplicable = (code) => {
-            return configs[code]?.is_applicable === 1;
+            const config = configs[code];
+            if (!config || config.is_applicable !== 1) return false;
+            if (config.applicable_months) {
+                const months = config.applicable_months.split(',').map(m => parseInt(m.trim()));
+                return months.includes(currentMonth);
+            }
+            return true;
         };
 
         // Helper to get override amount if set
         const getOverride = (code) => {
             return configs[code] ? configs[code].override_amount : null;
+        };
+
+        // Helper to get projection multiplier
+        const getMultiplier = (code) => {
+            return configs[code]?.projection_multiplier || 1;
         };
 
         // EPF Recalculation
@@ -536,12 +556,14 @@ class PayrollModel {
             if (ptOverride !== null) {
                 pt_amount = parseFloat(ptOverride);
             } else {
+                const mult = getMultiplier('PT');
+                const projectedPay = payable_amount * mult;
                 const [ptRows] = await pool.execute(
                     `SELECT COALESCE(monthly_tax, 0) AS pt_amount
                      FROM profession_tax_slab
                      WHERE ? >= min_salary AND (max_salary IS NULL OR ? <= max_salary)
                      ORDER BY min_salary DESC LIMIT 1`,
-                    [payable_amount, payable_amount]
+                    [projectedPay, projectedPay]
                 );
                 pt_amount = ptRows[0]?.pt_amount || 0;
             }

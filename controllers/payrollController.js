@@ -341,7 +341,8 @@ const getDisbursements = async (req, res, next) => {
 
 const getStatement = async (req, res, next) => {
     try {
-        const data = await PayrollModel.getStatement(req.params.id);
+        const sortBy = req.query.sortBy || 'id';
+        const data = await PayrollModel.getStatement(req.params.id, sortBy);
         sendResponse(res, 200, 'Salary statement fetched successfully', data);
     } catch (e) { next(e); }
 };
@@ -378,7 +379,8 @@ const updateDisbursement = async (req, res, next) => {
 
 const exportExcel = async (req, res, next) => {
     try {
-        const workbook = await excelHelper.generateExcelStatement(req.params.id);
+        const sortBy = req.query.sortBy || 'id';
+        const workbook = await excelHelper.generateExcelStatement(req.params.id, sortBy);
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         res.setHeader('Content-Disposition', `attachment; filename=payroll_statement_${req.params.id}.xlsx`);
         await workbook.xlsx.write(res);
