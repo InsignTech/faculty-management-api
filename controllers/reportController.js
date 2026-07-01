@@ -138,8 +138,11 @@ const exportDeductionsReport = async (req, res, next) => {
             'Applied Date': row.applied_on ? new Date(row.applied_on).toLocaleString('en-GB') : 'N/A',
             'Request Status': row.request_status,
             'Level 1 Approver': row.approver_1_name,
+            'Level 1 Action Date': row.approver_1_action_on ? new Date(row.approver_1_action_on).toLocaleString('en-GB') : 'N/A',
             'Level 2 Approver': row.approver_2_name,
-            'Actioned By (Final)': row.approved_by_name
+            'Level 2 Action Date': row.approver_2_action_on ? new Date(row.approver_2_action_on).toLocaleString('en-GB') : 'N/A',
+            'Actioned By (Final)': row.approved_by_name,
+            'Reason / Remarks': row.reason
         }));
 
         const wb = XLSX.utils.book_new();

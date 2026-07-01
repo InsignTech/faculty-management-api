@@ -232,7 +232,12 @@ class ReportModel {
                     lr.approver_2_id,
                     a2.employee_name AS approver_2_name,
                     lr.approved_by_id,
-                    ab.employee_name AS approved_by_name
+                    ab.employee_name AS approved_by_name,
+                    lr.approver_1_action_on,
+                    lr.approver_2_action_on,
+                    lr.approver_1_remarks,
+                    lr.approver_2_remarks,
+                    lr.reason
                 FROM attendance_daily ad
                 JOIN employee e ON ad.employee_id = e.employee_id
                 LEFT JOIN department dept ON e.department_id = dept.department_id
@@ -267,7 +272,12 @@ class ReportModel {
                     ar.approver_2_id,
                     a2.employee_name AS approver_2_name,
                     ar.approved_by AS approved_by_id,
-                    ab.employee_name AS approved_by_name
+                    ab.employee_name AS approved_by_name,
+                    ar.approver_1_action_on,
+                    ar.approver_2_action_on,
+                    ar.approver_1_remarks,
+                    ar.approver_2_remarks,
+                    ar.reason
                 FROM attendance_daily ad
                 JOIN employee e ON ad.employee_id = e.employee_id
                 LEFT JOIN department dept ON e.department_id = dept.department_id
@@ -302,7 +312,12 @@ class ReportModel {
                     NULL AS approver_2_id,
                     NULL AS approver_2_name,
                     NULL AS approved_by_id,
-                    NULL AS approved_by_name
+                    NULL AS approved_by_name,
+                    NULL AS approver_1_action_on,
+                    NULL AS approver_2_action_on,
+                    NULL AS approver_1_remarks,
+                    NULL AS approver_2_remarks,
+                    NULL AS reason
                 FROM attendance_daily ad
                 JOIN employee e ON ad.employee_id = e.employee_id
                 LEFT JOIN department dept ON e.department_id = dept.department_id
@@ -378,7 +393,12 @@ class ReportModel {
                 applied_on: row.applied_on,
                 approver_1_name: row.approver_1_name || 'N/A',
                 approver_2_name: row.approver_2_name || 'N/A',
-                approved_by_name: row.approved_by_name || 'N/A'
+                approved_by_name: row.approved_by_name || 'N/A',
+                approver_1_action_on: row.approver_1_action_on,
+                approver_2_action_on: row.approver_2_action_on,
+                approver_1_remarks: row.approver_1_remarks || '',
+                approver_2_remarks: row.approver_2_remarks || '',
+                reason: row.reason || ''
             };
         });
 
