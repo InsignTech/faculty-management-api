@@ -10,42 +10,116 @@ class AttendanceModel {
 
     // Process raw logs for all missing dates up to today
     static async processMissedLogs() {
-        const [rows] = await pool.query("SELECT MAX(date) as latest_date FROM attendance_daily");
-        let latestDate = rows[0].latest_date;
-
-        let startDate;
-        if (!latestDate) {
-            const [minLog] = await pool.query("SELECT DATE(MIN(punch_time)) as min_date FROM attendance_detail_log");
-            if (!minLog[0].min_date) {
-                return { total_processed: 0, days_processed: 0 };
-            }
-            startDate = new Date(minLog[0].min_date);
-        } else {
-            startDate = new Date(latestDate);
-            startDate.setDate(startDate.getDate() + 1);
-        }
-
+        const datesToProcess = new Set();
         const today = new Date();
         today.setHours(0, 0, 0, 0);
-        startDate.setHours(0, 0, 0, 0);
 
-        let currentDate = startDate;
+        try {
+            // 1. Get dates with unprocessed logs (processed_flag = 0) from the last 30 days
+            const [unprocessedRows] = await pool.query(
+                `SELECT DISTINCT DATE(punch_time) as log_date 
+                 FROM attendance_detail_log 
+                 WHERE processed_flag = 0 
+                   AND punch_time >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)`
+            );
+            for (const row of unprocessedRows) {
+                if (row.log_date) {
+                    const dateStr = new Date(row.log_date).toISOString().split('T')[0];
+                    datesToProcess.add(dateStr);
+                }
+            }
+
+            // 2. Determine start date for sequential processing
+            let latestDate = null;
+            try {
+                const [logRows] = await pool.query(
+                    "SELECT MAX(process_date) as latest_date FROM attendance_process_log WHERE status = 'Success'"
+                );
+                latestDate = logRows[0]?.latest_date;
+            } catch (err) {
+                // Table might not exist or other error, fallback to attendance_daily
+            }
+
+            if (!latestDate) {
+                const [dailyRows] = await pool.query("SELECT MAX(date) as latest_date FROM attendance_daily");
+                latestDate = dailyRows[0]?.latest_date;
+            }
+
+            let startDate;
+            if (!latestDate) {
+                const [minLog] = await pool.query("SELECT DATE(MIN(punch_time)) as min_date FROM attendance_detail_log");
+                if (minLog[0]?.min_date) {
+                    startDate = new Date(minLog[0].min_date);
+                } else {
+                    startDate = new Date();
+                    startDate.setDate(startDate.getDate() - 30); // Default to last 30 days
+                }
+            } else {
+                startDate = new Date(latestDate);
+                startDate.setDate(startDate.getDate() + 1);
+            }
+
+            startDate.setHours(0, 0, 0, 0);
+
+            // Limit backward search to max 35 days to avoid timeouts
+            const maxPastDate = new Date();
+            maxPastDate.setDate(maxPastDate.getDate() - 35);
+            maxPastDate.setHours(0, 0, 0, 0);
+            if (startDate < maxPastDate) {
+                startDate = maxPastDate;
+            }
+
+            // 3. Add all sequential missing days up to today
+            let currentDate = new Date(startDate);
+            while (currentDate <= today) {
+                const year = currentDate.getFullYear();
+                const month = String(currentDate.getMonth() + 1).padStart(2, '0');
+                const day = String(currentDate.getDate()).padStart(2, '0');
+                const dateStr = `${year}-${month}-${day}`;
+                datesToProcess.add(dateStr);
+                currentDate.setDate(currentDate.getDate() + 1);
+            }
+        } catch (error) {
+            console.error("Error determining dates to process:", error.message);
+        }
+
+        // 4. Sort dates chronologically
+        const sortedDates = Array.from(datesToProcess).sort();
         let totalProcessed = 0;
         let daysProcessed = 0;
 
-        while (currentDate <= today) {
-            const year = currentDate.getFullYear();
-            const month = String(currentDate.getMonth() + 1).padStart(2, '0');
-            const day = String(currentDate.getDate()).padStart(2, '0');
-            const localISOTime = `${year}-${month}-${day}`;
+        // 5. Process each date sequentially
+        for (const dateStr of sortedDates) {
+            try {
+                // Execute stored procedure
+                const [resultRows] = await pool.execute('CALL sp_process_attendance(?)', [dateStr]);
+                const rowsProcessed = resultRows[0]?.[0]?.processed_rows || 0;
 
-            const [resultRows] = await pool.execute('CALL sp_process_attendance(?)', [localISOTime]);
-            const rowsProcessed = resultRows[0][0]?.processed_rows || 0;
+                totalProcessed += rowsProcessed;
+                daysProcessed++;
 
-            totalProcessed += rowsProcessed;
-            daysProcessed++;
-
-            currentDate.setDate(currentDate.getDate() + 1);
+                // Log success to attendance_process_log
+                await pool.execute(
+                    `INSERT INTO attendance_process_log (process_date, status, message, processed_on) 
+                     VALUES (?, 'Success', 'Processed successfully', NOW()) 
+                     ON DUPLICATE KEY UPDATE status = VALUES(status), message = VALUES(message), processed_on = VALUES(processed_on)`,
+                    [dateStr]
+                );
+            } catch (error) {
+                console.error(`Error processing attendance for date ${dateStr}:`, error.message);
+                
+                // Log failure to attendance_process_log
+                try {
+                    await pool.execute(
+                        `INSERT INTO attendance_process_log (process_date, status, message, processed_on) 
+                         VALUES (?, 'Failed', ?, NOW()) 
+                         ON DUPLICATE KEY UPDATE status = VALUES(status), message = VALUES(message), processed_on = VALUES(processed_on)`,
+                        [dateStr, error.message.substring(0, 255)]
+                    );
+                } catch (logErr) {
+                    console.error("Failed to write error to process log:", logErr.message);
+                }
+            }
         }
 
         return { total_processed: totalProcessed, days_processed: daysProcessed };
