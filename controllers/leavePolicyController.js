@@ -23,7 +23,12 @@ const LEAVE_TYPES = [
   'Child Care Leave',
   'Business Travel Leave',
   'Work From Home',
-  'Mental Health Leave'
+  'Mental Health Leave',
+  'Casual',
+  'Unlimited Leave',
+  'Flexible Leave',
+  'Uncapped Leave',
+  'Discretionary Leave'
 ];
 
 const validatePolicyValue = (policyValue) => {

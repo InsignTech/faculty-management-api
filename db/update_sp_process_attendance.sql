@@ -1,7 +1,6 @@
-USE `staffdesk`;
-DROP PROCEDURE IF EXISTS `sp_process_attendance`;
-DELIMITER //
-CREATE DEFINER=`admin`@`localhost` PROCEDURE `sp_process_attendance`(IN p_date DATE)
+USE `staffdesk` //
+DROP PROCEDURE IF EXISTS `sp_process_attendance` //
+CREATE PROCEDURE `sp_process_attendance`(IN p_date DATE)
 BEGIN
 
     DECLARE done       INT DEFAULT FALSE;
@@ -15,6 +14,7 @@ BEGIN
     DECLARE v_is_worked    TINYINT      DEFAULT 0;
     DECLARE v_leave_type   VARCHAR(100) DEFAULT NULL;
     DECLARE v_leave_half   VARCHAR(20)  DEFAULT 'FullDay';
+    DECLARE v_is_paid      TINYINT      DEFAULT 1;
 
     DECLARE v_emp_shift_id INT DEFAULT -1;
 
@@ -76,6 +76,7 @@ BEGIN
         SET v_is_worked       = 0;
         SET v_leave_type      = NULL;
         SET v_leave_half      = 'FullDay';
+        SET v_is_paid         = 1;
         SET v_emp_shift_id    = -1;
         SET v_fd_start        = '09:00:00';
         SET v_fd_end          = '16:30:00';
@@ -207,10 +208,12 @@ BEGIN
 
             SELECT
                 lr.leave_type,
-                COALESCE(lr.leave_half_type, 'FullDay')
+                COALESCE(lr.leave_half_type, 'FullDay'),
+                lr.is_paid
             INTO
                 v_leave_type,
-                v_leave_half
+                v_leave_half,
+                v_is_paid
             FROM leave_requests lr
             WHERE lr.employee_id = v_emp_id
               AND lr.status      = 'Approved'
@@ -239,7 +242,7 @@ BEGIN
                 'Absent',
                 'FullDay',
                 0,
-                IF(v_leave_type IS NOT NULL, 0, 1),
+                IF(v_leave_type IS NOT NULL, IF(v_is_paid = 1, 0, 1), 1),
                 IF(v_leave_type IS NOT NULL, 1, 0),
                 CASE
                     WHEN v_leave_type IS NULL        THEN NULL
@@ -465,20 +468,28 @@ BEGIN
 
         -- ── Half-day leave adjustments (deduction cap only, never touch status) ──
         IF v_leave_type IS NOT NULL AND v_leave_half = 'FirstHalf' THEN
-            SET v_deduction    = IF(v_deduction > 0.5, 0.5, v_deduction);
+            IF v_is_paid = 1 THEN
+                SET v_deduction    = IF(v_deduction > 0.5, 0.5, v_deduction);
+            ELSE
+                SET v_deduction    = IF(v_deduction < 0.5, 0.5, v_deduction);
+            END IF;
             SET v_is_late      = 0;
             SET v_late_minutes = 0;
         END IF;
 
         IF v_leave_type IS NOT NULL AND v_leave_half = 'SecondHalf' THEN
-            SET v_deduction     = IF(v_deduction > 0.5, 0.5, v_deduction);
+            IF v_is_paid = 1 THEN
+                SET v_deduction     = IF(v_deduction > 0.5, 0.5, v_deduction);
+            ELSE
+                SET v_deduction     = IF(v_deduction < 0.5, 0.5, v_deduction);
+            END IF;
             SET v_is_early      = 0;
             SET v_early_minutes = 0;
         END IF;
 
         -- ── Full-day leave: deduction = 0 (employee is covered) ───────────────
         IF v_leave_type IS NOT NULL AND v_leave_half = 'FullDay' THEN
-            SET v_deduction = 0;
+            SET v_deduction = IF(v_is_paid = 1, 0, 1.0);
         END IF;
 
         -- ── Overtime: only clean FullDay (no late, no early) ──────────────────

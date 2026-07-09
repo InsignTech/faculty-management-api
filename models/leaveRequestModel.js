@@ -62,17 +62,31 @@ class LeaveRequestModel {
     try {
       await conn.beginTransaction();
 
+      // Resolve policy settings
+      const policy = await LeavePolicyModel.getEffectivePolicy(employee_id, start_date);
+      const policyItem = policy ? policy.policy_value.find(p => p.leaveType === leave_type) : null;
+      const isInfinite = policyItem && policyItem.infiniteLeaveCount === true;
+      const isDocumentMandatory = policyItem && policyItem.isDocumentMandatory === true;
+      const isPaid = policyItem ? (policyItem.isPaid !== false) : true;
+
+      // Document mandatory validation
+      if (isDocumentMandatory && !attachment_path) {
+        throw new Error(`Document upload is mandatory for ${leave_type}.`);
+      }
+
       // 1. Balance Validation
-      const [balanceRows] = await conn.execute(
-        `SELECT leave_type, balance_leave
-         FROM employee_leaves 
-         WHERE emp_id = ? AND month_year = ?`,
-        [employee_id, `${String(new Date(start_date).getMonth() + 1).padStart(2, '0')}-${new Date(start_date).getFullYear()}`]
-      );
-      
-      const leaveBalance = balanceRows.find(b => b.leave_type === leave_type);
-      if (leaveBalance && parseFloat(leaveBalance.balance_leave) < requestedDays) {
-        throw new Error(`Insufficient balance for ${leave_type}. Available: ${leaveBalance.balance_leave}, Requested: ${requestedDays}`);
+      if (!isInfinite) {
+        const [balanceRows] = await conn.execute(
+          `SELECT leave_type, balance_leave
+           FROM employee_leaves 
+           WHERE emp_id = ? AND month_year = ?`,
+          [employee_id, `${String(new Date(start_date).getMonth() + 1).padStart(2, '0')}-${new Date(start_date).getFullYear()}`]
+        );
+        
+        const leaveBalance = balanceRows.find(b => b.leave_type === leave_type);
+        if (leaveBalance && parseFloat(leaveBalance.balance_leave) < requestedDays) {
+          throw new Error(`Insufficient balance for ${leave_type}. Available: ${leaveBalance.balance_leave}, Requested: ${requestedDays}`);
+        }
       }
 
       // 2. Overlap Validation
@@ -152,6 +166,11 @@ class LeaveRequestModel {
       
       const result = rows[0][0];
 
+      // Update is_paid column
+      if (result && result.leave_request_id) {
+          await conn.execute('UPDATE leave_requests SET is_paid = ? WHERE leave_request_id = ?', [isPaid ? 1 : 0, result.leave_request_id]);
+      }
+
       // 4. Correct total_days if necessary
       if (result && result.leave_request_id && (!result.total_days || result.total_days == 0)) {
          if (halfType !== 'FullDay') {
@@ -203,6 +222,15 @@ class LeaveRequestModel {
     const d = new Date(date);
     const monthYear = `${String(d.getMonth() + 1).padStart(2, '0')}-${d.getFullYear()}`;
 
+    // Get the effective policy to map features (infinite, isPaid, isDocumentMandatory)
+    const policy = await LeavePolicyModel.getEffectivePolicy(employeeId, date);
+    const policyMap = {};
+    if (policy && policy.policy_value) {
+      policy.policy_value.forEach(p => {
+        policyMap[p.leaveType] = p;
+      });
+    }
+
     // 1. Get the base balance from the employee_leaves table (only updated on approval/accrual)
     const [rows] = await pool.execute(
       `SELECT leave_type, opening_leave, credited_count, leaves_taken, total_leaves, balance_leave
@@ -225,45 +253,79 @@ class LeaveRequestModel {
       pendingMap[p.leave_type] = parseFloat(p.pending_days);
     });
 
-    if (rows.length === 0) {
-        // Fallback or initialization if no records exist yet for this month
-        const policy = await LeavePolicyModel.getEffectivePolicy(employeeId, date);
-        if (!policy) return [];
-        return policy.policy_value.map(item => {
-            const pendingVal = pendingMap[item.leaveType] || 0;
-            const totalAlloc = parseFloat(item.leaveCount);
-            return {
-                leaveType: item.leaveType,
-                totalAllocated: totalAlloc,
-                opening: 0,
-                credited: 0,
-                used: pendingVal,
-                available: totalAlloc - pendingVal,
-                pending: pendingVal,
-                strategy: item.creditFrequency || item.cappingType
-            };
-        });
+    if (!policy || !policy.policy_value) return [];
+
+    const dbRowsMap = {};
+    rows.forEach(r => {
+      dbRowsMap[r.leave_type] = r;
+    });
+
+    const finalBalances = [];
+
+    for (const item of policy.policy_value) {
+      const leaveType = item.leaveType;
+      const pendingVal = pendingMap[leaveType] || 0;
+      const pol = policyMap[leaveType];
+      const isInfinite = pol && pol.infiniteLeaveCount === true;
+      
+      let dbRow = dbRowsMap[leaveType];
+      
+      if (!dbRow) {
+        // Find the latest balance from previous months
+        const [prevRows] = await pool.execute(
+          `SELECT opening_leave, credited_count, leaves_taken, total_leaves, balance_leave, month_year
+           FROM employee_leaves 
+           WHERE emp_id = ? AND leave_type = ?
+           ORDER BY CAST(SUBSTRING_INDEX(month_year, '-', -1) AS UNSIGNED) DESC, 
+                    CAST(SUBSTRING_INDEX(month_year, '-', 1) AS UNSIGNED) DESC 
+           LIMIT 1`,
+          [employeeId, leaveType]
+        );
+        
+        if (prevRows.length > 0) {
+          // Carry forward previous balance as opening/available
+          const prev = prevRows[0];
+          dbRow = {
+            leave_type: leaveType,
+            opening_leave: parseFloat(prev.balance_leave),
+            credited_count: 0,
+            leaves_taken: 0,
+            total_leaves: parseFloat(prev.balance_leave),
+            balance_leave: parseFloat(prev.balance_leave)
+          };
+        } else {
+          // Fallback to policy values
+          const totalAlloc = parseFloat(item.leaveCount || 0);
+          dbRow = {
+            leave_type: leaveType,
+            opening_leave: 0,
+            credited_count: 0,
+            leaves_taken: 0,
+            total_leaves: totalAlloc,
+            balance_leave: totalAlloc
+          };
+        }
+      }
+
+      finalBalances.push({
+        leaveType: leaveType,
+        opening: parseFloat(dbRow.opening_leave),
+        credited: parseFloat(dbRow.credited_count),
+        used: parseFloat(dbRow.leaves_taken) + pendingVal,
+        total: isInfinite ? 'Infinite' : parseFloat(dbRow.total_leaves),
+        available: isInfinite ? 'Infinite' : Math.max(0, parseFloat(dbRow.balance_leave) - pendingVal),
+        infinite: isInfinite,
+        isPaid: pol ? (pol.isPaid !== false) : true,
+        isDocumentMandatory: pol ? !!pol.isDocumentMandatory : false,
+        currentlyEarned: parseFloat(dbRow.total_leaves), 
+        totalAllocated: parseFloat(dbRow.total_leaves), 
+        carryForward: parseFloat(dbRow.opening_leave),
+        pending: pendingVal,
+        strategy: item.creditFrequency || item.cappingType || 'Table-Based'
+      });
     }
 
-    return rows.map(row => {
-      const pendingVal = pendingMap[row.leave_type] || 0;
-      const baseUsed = parseFloat(row.leaves_taken);
-      const baseAvailable = parseFloat(row.balance_leave);
-
-      return {
-        leaveType: row.leave_type,
-        opening: parseFloat(row.opening_leave),
-        credited: parseFloat(row.credited_count),
-        used: baseUsed + pendingVal, // Include pending in used
-        total: parseFloat(row.total_leaves),
-        available: Math.max(0, baseAvailable - pendingVal), // Subtract pending from available
-        currentlyEarned: parseFloat(row.total_leaves), 
-        totalAllocated: parseFloat(row.total_leaves), 
-        carryForward: parseFloat(row.opening_leave),
-        pending: pendingVal, // Send pending separately for UI highlighting
-        strategy: 'Table-Based'
-      };
-    });
+    return finalBalances;
   }
 
   static async superAdminCreateLeave(data, superAdminEmployeeId) {
@@ -276,7 +338,19 @@ class LeaveRequestModel {
     try {
       await conn.beginTransaction();
 
-      if (check_balance) {
+      // Resolve policy settings
+      const policy = await LeavePolicyModel.getEffectivePolicy(employee_id, start_date);
+      const policyItem = policy ? policy.policy_value.find(p => p.leaveType === leave_type) : null;
+      const isInfinite = policyItem && policyItem.infiniteLeaveCount === true;
+      const isDocumentMandatory = policyItem && policyItem.isDocumentMandatory === true;
+      const isPaid = policyItem ? (policyItem.isPaid !== false) : true;
+
+      // Document mandatory validation
+      if (isDocumentMandatory && !attachment_path) {
+        throw new Error(`Document upload is mandatory for ${leave_type}.`);
+      }
+
+      if (check_balance && !isInfinite) {
         const balances = await LeaveRequestModel.getLeaveBalance(employee_id, new Date(start_date));
         const leaveBalance = balances.find(b => b.leaveType === leave_type);
         if (!leaveBalance) {
@@ -307,8 +381,8 @@ class LeaveRequestModel {
         `INSERT INTO leave_requests (
             employee_id, leave_type, start_date, end_date, total_days,
             reason, attachment_path, status, applied_on,
-            substitute_employee_id, approver_1_id, approver_2_id, current_level
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, ?, 1)`,
+            substitute_employee_id, approver_1_id, approver_2_id, current_level, is_paid
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, ?, 1, ?)`,
         [
           employee_id,
           leave_type,
@@ -320,7 +394,8 @@ class LeaveRequestModel {
           'Pending',
           substitute_employee_id || null,
           approver1,
-          approver2
+          approver2,
+          isPaid ? 1 : 0
         ]
       );
 

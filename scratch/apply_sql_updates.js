@@ -28,7 +28,10 @@ async function main() {
         // 1. Update sp_approve_leave
         await runSqlFile(path.join(__dirname, '../db/update_sp_approve_leave.sql'));
         
-        // 2. Create sp_cancel_leave
+        // 2. Update sp_process_attendance
+        await runSqlFile(path.join(__dirname, '../db/update_sp_process_attendance.sql'));
+        
+        // 3. Create sp_cancel_leave
         await runSqlFile(path.join(__dirname, '../db/sp_cancel_leave.sql'));
         
         console.log('SQL updates completed.');

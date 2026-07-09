@@ -18,7 +18,10 @@ class LeaveModel {
         return balance.map(b => ({
             leave_type: b.leaveType,
             available: b.available,
-            strategy: b.strategy
+            strategy: b.strategy,
+            infinite: b.infinite,
+            isPaid: b.isPaid,
+            isDocumentMandatory: b.isDocumentMandatory
         }));
     }
 
@@ -445,17 +448,19 @@ class LeaveModel {
                 const isLeaveEx     = ad.is_leave;
                 const leaveShiftEx  = ad.leave_shift_type;
 
-                const firstHalf  = ['FirstHalf', 'FullDay'].includes(curShift) ||
+                const isPaid = lr.is_paid === 1 || lr.is_paid === true || lr.is_paid === '1';
+
+                const firstHalf  = (ad.status === 'Present' && ['FirstHalf', 'FullDay'].includes(curShift)) ||
                                    ['FirstHalf', 'FullDay'].includes(regShift) ||
                                    ['FirstHalf', 'FullDay'].includes(odShift) ||
                                    (isLeaveEx && ['FirstHalf', 'FullDay'].includes(leaveShiftEx)) ||
-                                   ['FirstHalf', 'FullDay'].includes(halfType);
+                                   (isPaid && ['FirstHalf', 'FullDay'].includes(halfType));
 
-                const secondHalf = ['SecondHalf', 'FullDay'].includes(curShift) ||
+                const secondHalf = (ad.status === 'Present' && ['SecondHalf', 'FullDay'].includes(curShift)) ||
                                    ['SecondHalf', 'FullDay'].includes(regShift) ||
                                    ['SecondHalf', 'FullDay'].includes(odShift) ||
                                    (isLeaveEx && ['SecondHalf', 'FullDay'].includes(leaveShiftEx)) ||
-                                   ['SecondHalf', 'FullDay'].includes(halfType);
+                                   (isPaid && ['SecondHalf', 'FullDay'].includes(halfType));
 
                 const finalShift = (firstHalf && secondHalf) ? 'FullDay'
                                  : firstHalf                  ? 'FirstHalf'
