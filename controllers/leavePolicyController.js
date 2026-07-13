@@ -28,8 +28,13 @@ const LEAVE_TYPES = [
   'Unlimited Leave',
   'Flexible Leave',
   'Uncapped Leave',
+  'ESI (LOP)',
+  'Medical (LOP)',
+  'Duty Leave',
+  'Leave Without Pay',
   'Discretionary Leave'
 ];
+
 
 const validatePolicyValue = (policyValue) => {
   if (!Array.isArray(policyValue)) return false;
