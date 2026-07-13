@@ -40,10 +40,10 @@ const handleAdmsRequest = async (req, res) => {
                 
                 try {
                     await pool.query(
-                        `INSERT INTO attendance_punches 
-                        (device_sn, employee_code, punch_time, punch_state, verify_mode, work_code, raw_data) 
-                        VALUES (?, ?, ?, ?, ?, ?, ?)`,
-                        [SN || 'UNKNOWN', employeeCode, punchTime, punchState, verifyMode, workCode, line]
+                        `INSERT IGNORE INTO attendance_punches_detail 
+                        (employee_code, punch_time) 
+                        VALUES (?, ?)`,
+                        [employeeCode, punchTime]
                     );
                 } catch (err) {
                     console.error('Error inserting punch:', err);

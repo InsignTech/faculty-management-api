@@ -1,14 +1,12 @@
-USE `staffdesk`;
-
-DELIMITER //
-
+USE `staffdesk` //
 DROP PROCEDURE IF EXISTS `sp_approve_leave` //
 
 CREATE PROCEDURE `sp_approve_leave`(
     IN p_leave_request_id INT,
     IN p_approved_by      INT,
     IN p_action           ENUM('Approved','Rejected'),
-    IN p_rejection_reason TEXT
+    IN p_rejection_reason TEXT,
+    IN p_substitute_id    INT
 )
 proc: BEGIN
 
@@ -19,6 +17,7 @@ proc: BEGIN
     DECLARE v_leave_half     VARCHAR(20);
     DECLARE v_current_status VARCHAR(20);
     DECLARE v_current_date   DATE;
+    DECLARE v_is_paid        TINYINT DEFAULT 1;
 
     -- ─── Transaction Management ──────────────────────────────────────────────
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
@@ -36,14 +35,16 @@ proc: BEGIN
         end_date,
         leave_type,
         COALESCE(leave_half_type, 'FullDay'),
-        status
+        status,
+        is_paid
     INTO
         v_emp_id,
         v_start_date,
         v_end_date,
         v_leave_type,
         v_leave_half,
-        v_current_status
+        v_current_status,
+        v_is_paid
     FROM leave_requests
     WHERE leave_request_id = p_leave_request_id;
 
@@ -65,10 +66,11 @@ proc: BEGIN
     -- ─── Update leave request status ─────────────────────────────────────────
     UPDATE leave_requests
     SET
-        status           = p_action,
-        approved_by_id   = p_approved_by,
-        approved_on      = NOW(),
-        rejection_reason = IF(p_action = 'Rejected', p_rejection_reason, NULL)
+        status                 = p_action,
+        approved_by_id         = p_approved_by,
+        approved_on            = NOW(),
+        rejection_reason       = IF(p_action = 'Rejected', p_rejection_reason, NULL),
+        substitute_employee_id = COALESCE(p_substitute_id, substitute_employee_id)
     WHERE leave_request_id = p_leave_request_id;
 
     -- ── Phase 1: Validation Loop (Check for conflicts BEFORE updating balance) ──
@@ -171,19 +173,19 @@ proc: BEGIN
 
             -- ── Calculate Merged Coverage ────────────────────────────────────────
             SET @v_first_half_covered = (
-                (@cur_shift IN ('FirstHalf', 'FullDay')) OR
-                (@reg_shift IN ('FirstHalf', 'FullDay')) OR
-                (@od_shift IN ('FirstHalf', 'FullDay')) OR
-                (@is_leave_existing = 1 AND @leave_shift_existing IN ('FirstHalf', 'FullDay')) OR
-                (v_leave_half IN ('FirstHalf', 'FullDay'))
+                (COALESCE(@cur_status, '') = 'Present' AND @cur_shift IN ('FirstHalf', 'FullDay')) OR
+                (COALESCE(@reg_shift, '') IN ('FirstHalf', 'FullDay')) OR
+                (COALESCE(@od_shift, '') IN ('FirstHalf', 'FullDay')) OR
+                (COALESCE(@is_leave_existing, 0) = 1 AND COALESCE(@leave_shift_existing, '') IN ('FirstHalf', 'FullDay')) OR
+                (COALESCE(v_is_paid, 1) = 1 AND v_leave_half IN ('FirstHalf', 'FullDay'))
             );
 
             SET @v_second_half_covered = (
-                (@cur_shift IN ('SecondHalf', 'FullDay')) OR
-                (@reg_shift IN ('SecondHalf', 'FullDay')) OR
-                (@od_shift IN ('SecondHalf', 'FullDay')) OR
-                (@is_leave_existing = 1 AND @leave_shift_existing IN ('SecondHalf', 'FullDay')) OR
-                (v_leave_half IN ('SecondHalf', 'FullDay'))
+                (COALESCE(@cur_status, '') = 'Present' AND @cur_shift IN ('SecondHalf', 'FullDay')) OR
+                (COALESCE(@reg_shift, '') IN ('SecondHalf', 'FullDay')) OR
+                (COALESCE(@od_shift, '') IN ('SecondHalf', 'FullDay')) OR
+                (COALESCE(@is_leave_existing, 0) = 1 AND COALESCE(@leave_shift_existing, '') IN ('SecondHalf', 'FullDay')) OR
+                (COALESCE(v_is_paid, 1) = 1 AND v_leave_half IN ('SecondHalf', 'FullDay'))
             );
 
             SET @final_deduct = IF(@v_first_half_covered AND @v_second_half_covered, 0.00, 0.50);
@@ -202,18 +204,17 @@ proc: BEGIN
                 employee_id, date, first_in_time, last_out_time, worked_mins,
                 shift_type, status, is_late, late_minutes, is_early_leaving, early_minutes,
                 overtime_minutes, deduction_days, is_worked_on_holiday,
-                is_leave, is_leave_type, leave_shift_type
+                is_leave, leave_shift_type
             ) VALUES (
                 v_emp_id, v_current_date, @first_in, @last_out, @worked_mins,
                 @final_shift, @final_status, 0, 0, 0, 0, 0,
-                @final_deduct, 0, 1, v_leave_type, v_leave_half
+                @final_deduct, 0, 1, v_leave_half
             )
             ON DUPLICATE KEY UPDATE
                 shift_type = @final_shift,
                 status = @final_status,
                 deduction_days = @final_deduct,
                 is_leave = 1,
-                is_leave_type = v_leave_type,
                 leave_shift_type = IF(v_leave_half = 'FullDay', 'FullDay', 
                                       IF(@is_leave_existing = 1 AND @leave_shift_existing != v_leave_half, 'FullDay', v_leave_half));
 

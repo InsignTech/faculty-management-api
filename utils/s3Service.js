@@ -20,6 +20,7 @@ const uploadToR2 = async (buffer, originalName, folder = "profiles") => {
       Key: fileName,
       Body: buffer,
       ContentType: getContentType(extension),
+      ContentDisposition: "inline",
     }),
   );
 
@@ -52,6 +53,7 @@ const getContentType = (ext) => {
     ".png": "image/png",
     ".gif": "image/gif",
     ".webp": "image/webp",
+    ".pdf": "application/pdf",
   };
   return types[ext.toLowerCase()] || "application/octet-stream";
 };
