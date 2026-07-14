@@ -190,7 +190,7 @@ BEGIN
             INTO
                 v_first_in,
                 v_last_out
-            FROM attendance_detail_log l
+            FROM attendance_punches_detail l
             JOIN employee e
                 ON TRIM(e.employee_code) = TRIM(l.employee_code)
             WHERE e.employee_id = v_emp_id
@@ -217,11 +217,6 @@ BEGIN
         ORDER BY holiday_id DESC
         LIMIT 1;
 
-        IF v_holiday_type IS NULL THEN
-            IF DAYNAME(p_date) IN ('Sunday', 'Saturday') THEN
-                SET v_holiday_type = 'WeekEnd';
-            END IF;
-        END IF;
 
         -- ── Skip check-in logic if Holiday / Weekend (No Punches required) ──────
         IF v_holiday_type IS NOT NULL AND v_first_in IS NULL THEN
@@ -242,12 +237,6 @@ BEGIN
                 worked_mins    = 0,
                 deduction_days = 0.00;
 
-            -- If weekend / holiday is processed, clear regularization logs
-            UPDATE regularization_logs l
-            SET l.processed_flag = 1
-            WHERE l.employee_id = v_emp_id 
-              AND l.regularization_date = p_date 
-              AND l.processed_flag = 0;
 
             ITERATE read_loop;
 
@@ -311,11 +300,6 @@ BEGIN
                 regularization_shift_type = NULL,
                 onduty_shift_type         = NULL;
 
-            UPDATE regularization_logs l
-            SET l.processed_flag = 1
-            WHERE l.employee_id = v_emp_id 
-              AND l.regularization_date = p_date 
-              AND l.processed_flag = 0;
 
             ITERATE read_loop;
 
@@ -325,34 +309,102 @@ BEGIN
         IF v_first_in = v_last_out THEN
             SET v_deduction = 1.00;
             SET v_no_punch_out = 1;
+            SET v_shift_type = 'FullDay';
         ELSE
-            -- ── Double punch → Evaluate times ─────────────────────────────────
-            -- Calculate Lateness (grace matches s.fd_start_grace)
-            IF v_first_in > v_fd_grace_in THEN
-                SET v_is_late = 1;
-                SET v_late_minutes = TIMESTAMPDIFF(MINUTE, v_fd_start, v_first_in);
-            END IF;
+            SET v_no_punch_out = 0;
 
-            -- Calculate Early leaving (grace matches s.fd_end_grace)
-            IF v_last_out < v_fd_grace_out THEN
-                SET v_is_early = 1;
-                SET v_early_minutes = TIMESTAMPDIFF(MINUTE, v_last_out, v_fd_end);
-            END IF;
+            -- ── Shift classification ───────────────────────────────────────────
+            IF v_first_in <= v_fd_grace_in
+                AND v_last_out >= v_fd_grace_out THEN
+                SET v_shift_type = 'FullDay';
+                SET v_deduction  = 0.00;
 
-            -- Base Deduction calculations
-            IF v_is_late = 1 AND v_is_early = 1 THEN
-                SET v_deduction = 1.00;
-            ELSEIF v_is_late = 1 OR v_is_early = 1 THEN
-                SET v_deduction = 0.50;
+            ELSEIF v_first_in  <= v_fh_grace_in
+                AND v_last_out  >= v_fh_grace_out
+                AND v_last_out   < v_fd_grace_out THEN
+                SET v_shift_type = 'FirstHalf';
+                SET v_deduction  = 0.50;
+
+            ELSEIF v_first_in  >  v_fh_grace_in
+                AND v_first_in  <= v_sh_grace_in
+                AND v_last_out  >= v_sh_grace_out THEN
+                SET v_shift_type = 'SecondHalf';
+                SET v_deduction  = 0.50;
+
             ELSE
-                SET v_deduction = 0.00;
+                IF v_last_out <= v_fh_end THEN
+                    SET v_shift_type = 'FirstHalf';
+                    SET v_deduction  = 0.50;
+                ELSEIF v_first_in >= v_sh_start THEN
+                    SET v_shift_type = 'SecondHalf';
+                    SET v_deduction  = 0.50;
+                ELSE
+                    SET v_shift_type = 'FullDay';
+                    SET v_deduction  = 0.00;
+                END IF;
             END IF;
 
-            -- ── Special adjustment: Underworked hours ────────────────────────
-            IF v_worked_mins < 240 THEN
-                SET v_deduction = 1.00;
-            ELSEIF v_worked_mins < 420 AND v_deduction < 0.50 THEN
-                SET v_deduction = 0.50;
+            -- ── Late-in detection ──────────────────────────────────────────────
+            IF v_shift_type IN ('FullDay', 'FirstHalf') THEN
+                IF v_first_in > v_fd_grace_in THEN
+                    SET v_is_late      = 1;
+                    SET v_late_minutes = TIMESTAMPDIFF(MINUTE, v_fd_start, v_first_in);
+                END IF;
+            END IF;
+
+            IF v_shift_type = 'SecondHalf' THEN
+                IF v_first_in > v_sh_grace_in THEN
+                    SET v_is_late      = 1;
+                    SET v_late_minutes = TIMESTAMPDIFF(MINUTE, v_sh_start, v_first_in);
+                END IF;
+            END IF;
+
+            -- ── Early-leaving detection ────────────────────────────────────────
+            IF v_shift_type = 'FullDay' THEN
+                IF v_last_out < v_fd_grace_out THEN
+                    SET v_is_early      = 1;
+                    SET v_early_minutes = TIMESTAMPDIFF(MINUTE, v_last_out, v_fd_end);
+                END IF;
+            END IF;
+
+            IF v_shift_type = 'FirstHalf' THEN
+                IF v_last_out > v_fh_end AND v_last_out < v_fd_grace_out THEN
+                    SET v_is_early      = 1;
+                    SET v_early_minutes = TIMESTAMPDIFF(MINUTE, v_last_out, v_fd_end);
+                ELSEIF v_last_out <= v_fh_end AND v_last_out < v_fh_grace_out THEN
+                    SET v_is_early      = 1;
+                    SET v_early_minutes = TIMESTAMPDIFF(MINUTE, v_last_out, v_fh_end);
+                END IF;
+            END IF;
+
+            IF v_shift_type = 'SecondHalf' THEN
+                IF v_last_out < v_sh_grace_out THEN
+                    SET v_is_early      = 1;
+                    SET v_early_minutes = TIMESTAMPDIFF(MINUTE, v_last_out, v_sh_end);
+                END IF;
+            END IF;
+
+            -- ── Deduction penalties ────────────────────────────────────────────
+            IF v_shift_type = 'FullDay' THEN
+                IF v_is_late = 1 AND v_is_early = 1 THEN
+                    SET v_deduction = 1.00;
+                ELSEIF v_is_late = 1 OR v_is_early = 1 THEN
+                    SET v_deduction = v_deduction + 0.50;
+                END IF;
+            END IF;
+
+            IF v_shift_type = 'FirstHalf' THEN
+                IF v_is_late = 1 OR v_is_early = 1 THEN
+                    IF v_last_out <= v_fh_end THEN
+                        SET v_deduction = 1.00;
+                    END IF;
+                END IF;
+            END IF;
+
+            IF v_shift_type = 'SecondHalf' THEN
+                IF v_is_late = 1 OR v_is_early = 1 THEN
+                    SET v_deduction = 1.00;
+                END IF;
             END IF;
         END IF;
 
@@ -360,6 +412,7 @@ BEGIN
         IF v_holiday_type IS NOT NULL THEN
             SET v_deduction = 0.00;
             SET v_is_worked = 1;
+            SET v_shift_type = 'FullDay';
         END IF;
 
         IF v_deduction > 1.0 THEN SET v_deduction = 1.0; END IF;
@@ -398,20 +451,6 @@ BEGIN
             SET v_overtime_mins = v_worked_mins - 480;
         END IF;
 
-        -- Derive status based exclusively on raw punch quality (punch-only deduction)
-        SET v_shift_type = CASE
-            WHEN v_punch_deduction = 1.00 THEN 'FullDay'
-            WHEN v_is_late = 1            THEN 'SecondHalf'
-            WHEN v_is_early = 1           THEN 'FirstHalf'
-            ELSE 'FullDay'
-        END;
-
-        SET v_shift_type = IF(v_worked_mins < 420 AND v_worked_mins >= 240, 'FirstHalf', v_shift_type);
-
-        IF v_holiday_type IS NOT NULL THEN
-            SET v_shift_type = 'FullDay';
-        END IF;
-
         -- Write record
         INSERT INTO attendance_daily (
             employee_id, date, first_in_time, last_out_time, worked_mins,
@@ -420,7 +459,7 @@ BEGIN
             is_early_leaving, early_minutes,
             overtime_minutes, deduction_days,
             is_worked_on_holiday,
-            is_leave, is_leave_type, leave_shift_type,
+            is_leave, leave_shift_type,
             created_on
         )
         VALUES (
@@ -432,7 +471,6 @@ BEGIN
             v_overtime_mins, v_deduction,
             v_is_worked,
             IF(v_leave_type IS NOT NULL, 1, 0),
-            v_leave_type,
             IF(v_leave_type IS NOT NULL, v_leave_half, NULL),
             NOW()
         )
@@ -450,20 +488,13 @@ BEGIN
             deduction_days            = VALUES(deduction_days),
             is_worked_on_holiday      = VALUES(is_worked_on_holiday),
             is_leave                  = VALUES(is_leave),
-            is_leave_type             = VALUES(is_leave_type),
             leave_shift_type          = VALUES(leave_shift_type),
             regularization_shift_type = regularization_shift_type,
             onduty_shift_type         = onduty_shift_type;
 
-        -- Clear regularization log flags
-        UPDATE regularization_logs l
-        SET l.processed_flag = 1
-        WHERE l.employee_id = v_emp_id 
-          AND l.regularization_date = p_date 
-          AND l.processed_flag = 0;
 
         -- ── Mark punches processed ─────────────────────────────────────────────
-        UPDATE attendance_detail_log l
+        UPDATE attendance_punches_detail l
         JOIN   employee e
             ON TRIM(e.employee_code) = TRIM(l.employee_code)
         SET    l.processed_flag = 1
@@ -479,7 +510,7 @@ BEGIN
     -- 1. Identify and log punches for inactive employees
     INSERT INTO attendance_invalid_log (employee_id, punch_time, reason)
     SELECT l.employee_code, l.punch_time, 'Inactive employee'
-    FROM attendance_detail_log l
+    FROM attendance_punches_detail l
     JOIN employee e ON TRIM(e.employee_code) = TRIM(l.employee_code)
     WHERE l.punch_time >= CONCAT(p_date, ' 00:00:00')
       AND l.punch_time < CONCAT(DATE_ADD(p_date, INTERVAL 1 DAY), ' 00:00:00')
@@ -489,7 +520,7 @@ BEGIN
     -- 2. Identify and log punches for unknown/unmatched employee codes
     INSERT INTO attendance_invalid_log (employee_id, punch_time, reason)
     SELECT l.employee_code, l.punch_time, 'Unknown employee code'
-    FROM attendance_detail_log l
+    FROM attendance_punches_detail l
     LEFT JOIN employee e ON TRIM(e.employee_code) = TRIM(l.employee_code)
     WHERE l.punch_time >= CONCAT(p_date, ' 00:00:00')
       AND l.punch_time < CONCAT(DATE_ADD(p_date, INTERVAL 1 DAY), ' 00:00:00')
@@ -497,7 +528,7 @@ BEGIN
       AND e.employee_id IS NULL;
 
     -- 3. Mark all remaining unprocessed logs for this date as processed_flag = 2
-    UPDATE attendance_detail_log l
+    UPDATE attendance_punches_detail l
     SET l.processed_flag = 2
     WHERE l.punch_time >= CONCAT(p_date, ' 00:00:00')
       AND l.punch_time < CONCAT(DATE_ADD(p_date, INTERVAL 1 DAY), ' 00:00:00')
