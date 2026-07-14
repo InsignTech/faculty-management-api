@@ -3,8 +3,8 @@ const AttendanceModel = require('../models/attendanceModel');
 const debugLog = require('../utils/debugLogger');
 
 // Schedule tasks to be run on the server.
-// The schedule: '0 21 * * *' translates to 09:00 PM every day.
-cron.schedule('0 21 * * *', async () => {
+// The schedule: '0 19 * * *' translates to 07:00 PM every day.
+cron.schedule('0 19 * * *', async () => {
     debugLog('⏱️  [CRON] Starting nightly attendance processing...', 'INFO');
 
     try {
@@ -21,6 +21,6 @@ cron.schedule('0 21 * * *', async () => {
     timezone: "Asia/Kolkata" // Adjust timezone based on organization's location.
 });
 
-debugLog('🕒 [CRON] Attendance cron job initialized and scheduled for 09:00 PM daily.', 'INFO');
+debugLog('🕒 [CRON] Attendance cron job initialized and scheduled for 07:00 PM daily.', 'INFO');
 
 module.exports = cron;
