@@ -18,7 +18,7 @@ class AttendanceModel {
             // 1. Get dates with unprocessed logs (processed_flag = 0) from the last 30 days
             const [unprocessedRows] = await pool.query(
                 `SELECT DISTINCT DATE(punch_time) as log_date 
-                 FROM attendance_detail_log 
+                 FROM attendance_punches_detail 
                  WHERE processed_flag = 0 
                    AND punch_time >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)`
             );
@@ -47,7 +47,7 @@ class AttendanceModel {
 
             let startDate;
             if (!latestDate) {
-                const [minLog] = await pool.query("SELECT DATE(MIN(punch_time)) as min_date FROM attendance_detail_log");
+                const [minLog] = await pool.query("SELECT DATE(MIN(punch_time)) as min_date FROM attendance_punches_detail");
                 if (minLog[0]?.min_date) {
                     startDate = new Date(minLog[0].min_date);
                 } else {

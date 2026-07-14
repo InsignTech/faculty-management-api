@@ -115,6 +115,15 @@ BEGIN
             LIMIT  1;
 
             IF v_reg_check IS NOT NULL OR v_od_check IS NOT NULL THEN
+                -- Mark punches processed so they aren't marked as invalid (2) or left unprocessed at the end
+                UPDATE attendance_punches_detail l
+                JOIN   employee e ON TRIM(e.employee_code) = TRIM(l.employee_code)
+                SET    l.processed_flag = 1
+                WHERE  e.employee_id    = v_emp_id
+                  AND  l.punch_time    >= CONCAT(p_date, ' 00:00:00')
+                  AND  l.punch_time     < CONCAT(DATE_ADD(p_date, INTERVAL 1 DAY), ' 00:00:00')
+                  AND  l.processed_flag = 0;
+
                 ITERATE read_loop;
             END IF;
         END;
@@ -210,14 +219,17 @@ BEGIN
         END IF;
 
         -- ── Holiday Check ──────────────────────────────────────────────────────
-        SELECT holiday_type 
-        INTO v_holiday_type
-        FROM holiday_master
-        WHERE p_date BETWEEN holiday_start_date AND holiday_end_date
-          AND is_active = 1
-          AND (employee_id IS NULL OR employee_id = 0 OR employee_id = v_emp_id)
-        ORDER BY holiday_id DESC
-        LIMIT 1;
+        BEGIN
+            DECLARE CONTINUE HANDLER FOR NOT FOUND BEGIN END;
+            SELECT holiday_type 
+            INTO v_holiday_type
+            FROM holiday_master
+            WHERE p_date BETWEEN holiday_start_date AND holiday_end_date
+              AND is_active = 1
+              AND (employee_id IS NULL OR employee_id = 0 OR employee_id = v_emp_id)
+            ORDER BY holiday_id DESC
+            LIMIT 1;
+        END;
 
 
         -- ── Skip check-in logic if Holiday / Weekend (No Punches required) ──────
@@ -509,7 +521,7 @@ BEGIN
 
     CLOSE emp_cursor;
 
-    -- 1. Identify and log punches for inactive employees
+    -- 1. Identify, log, and mark punches for inactive employees as processed_flag = 2
     INSERT INTO attendance_invalid_log (employee_id, punch_time, reason)
     SELECT l.employee_code, l.punch_time, 'Inactive employee'
     FROM attendance_punches_detail l
@@ -519,7 +531,15 @@ BEGIN
       AND l.processed_flag = 0
       AND e.active = 0;
 
-    -- 2. Identify and log punches for unknown/unmatched employee codes
+    UPDATE attendance_punches_detail l
+    JOIN employee e ON TRIM(e.employee_code) = TRIM(l.employee_code)
+    SET l.processed_flag = 2
+    WHERE l.punch_time >= CONCAT(p_date, ' 00:00:00')
+      AND l.punch_time < CONCAT(DATE_ADD(p_date, INTERVAL 1 DAY), ' 00:00:00')
+      AND l.processed_flag = 0
+      AND e.active = 0;
+
+    -- 2. Identify, log, and mark punches for unknown/unmatched employee codes as processed_flag = 2
     INSERT INTO attendance_invalid_log (employee_id, punch_time, reason)
     SELECT l.employee_code, l.punch_time, 'Unknown employee code'
     FROM attendance_punches_detail l
@@ -529,12 +549,13 @@ BEGIN
       AND l.processed_flag = 0
       AND e.employee_id IS NULL;
 
-    -- 3. Mark all remaining unprocessed logs for this date as processed_flag = 2
     UPDATE attendance_punches_detail l
+    LEFT JOIN employee e ON TRIM(e.employee_code) = TRIM(l.employee_code)
     SET l.processed_flag = 2
     WHERE l.punch_time >= CONCAT(p_date, ' 00:00:00')
       AND l.punch_time < CONCAT(DATE_ADD(p_date, INTERVAL 1 DAY), ' 00:00:00')
-      AND l.processed_flag = 0;
+      AND l.processed_flag = 0
+      AND e.employee_id IS NULL;
 
     SET SESSION MAX_EXECUTION_TIME = 0;
     SET SQL_SAFE_UPDATES = 1;
