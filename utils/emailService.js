@@ -140,4 +140,97 @@ const sendOTPEmail = async ({ toEmail, otp }) => {
     });
 };
 
-module.exports = { sendWelcomeEmail, sendOTPEmail };
+/**
+ * Send daily attendance mismatch report to admins.
+ */
+const sendAttendanceMismatchReport = async ({ toEmails, records, checkDate }) => {
+    const fromAddress = process.env.EMAIL_FROM || `"StaffDesk" <${process.env.EMAIL_USER}>`;
+    
+    // Generate table rows
+    let tableRows = '';
+    for (const record of records) {
+        const dateStr = record.date ? new Date(record.date).toISOString().split('T')[0] : checkDate;
+        const mismatchReason = record.first_in_time > '09:20:00' && (record.is_late === 0 || record.deduction_days === 0)
+            ? 'Late arrival with no deduction/flag'
+            : 'Early out with no deduction/flag';
+
+        tableRows += `
+            <tr>
+                <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; font-weight: 600; color: #1e293b;">${record.employee_code}</td>
+                <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; color: #334155;">${record.employee_name}</td>
+                <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; color: #475569;">${record.first_in_time || '-'}</td>
+                <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; color: #475569;">${record.last_out_time || '-'}</td>
+                <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; text-align: center; color: #475569;">${record.is_late ? 'Yes' : 'No'} (${record.late_minutes || 0}m)</td>
+                <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; text-align: center; color: #475569;">${record.is_early_leaving ? 'Yes' : 'No'} (${record.early_minutes || 0}m)</td>
+                <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; text-align: center; font-weight: bold; color: #dc2626;">${record.deduction_days}</td>
+                <td style="padding: 12px; border-bottom: 1px solid #e2e8f0; color: #b45309; font-weight: 500; font-size: 13px;">${mismatchReason}</td>
+            </tr>
+        `;
+    }
+
+    const html = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f8fafc; margin: 0; padding: 0; }
+    .wrapper { max-width: 800px; margin: 40px auto; background: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 24px rgba(0,0,0,0.08); }
+    .header { background: linear-gradient(135deg, #e11d48, #be123c); padding: 36px 40px; text-align: center; }
+    .header h1 { color: white; margin: 0; font-size: 24px; font-weight: 800; letter-spacing: -0.5px; }
+    .header p { color: rgba(255,255,255,0.8); margin: 8px 0 0; font-size: 14px; }
+    .body { padding: 36px 40px; }
+    .body p { color: #374151; line-height: 1.7; margin: 0 0 16px; }
+    .table-container { overflow-x: auto; margin-top: 24px; }
+    table { width: 100%; border-collapse: collapse; text-align: left; font-size: 14px; }
+    th { background: #f1f5f9; color: #475569; font-weight: 700; padding: 12px; border-bottom: 2px solid #cbd5e1; text-transform: uppercase; font-size: 11px; letter-spacing: 0.5px; }
+    .footer { padding: 20px 40px; background: #f8fafc; border-top: 1px solid #f1f5f9; }
+    .footer p { color: #94a3b8; font-size: 12px; margin: 0; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+    <div class="header">
+      <h1>Attendance Mismatch & Anomaly Report</h1>
+      <p>Report Generated on ${checkDate} (Daily Automated Check)</p>
+    </div>
+    <div class="body">
+      <p>Hi Admin,</p>
+      <p>The daily automated attendance checker identified the following active employees with potential mismatch anomalies (e.g., late entry or early exit without appropriate flags or salary deductions):</p>
+      
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Code</th>
+              <th>Employee Name</th>
+              <th>In</th>
+              <th>Out</th>
+              <th style="text-align: center;">Late</th>
+              <th style="text-align: center;">Early</th>
+              <th style="text-align: center;">Deduction</th>
+              <th>Anomaly Reason</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${tableRows}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="footer">
+      <p>This email was sent automatically by StaffDesk. Please review the employee records in the admin dashboard.</p>
+    </div>
+  </div>
+</body>
+</html>`;
+
+    await transporter.sendMail({
+        from: fromAddress,
+        to: toEmails.join(','),
+        subject: `⚠️ StaffDesk Attendance Anomaly Report — ${checkDate}`,
+        html,
+    });
+};
+
+module.exports = { sendWelcomeEmail, sendOTPEmail, sendAttendanceMismatchReport };
