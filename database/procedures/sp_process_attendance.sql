@@ -305,6 +305,8 @@ BEGIN
                 NOW()
             )
             ON DUPLICATE KEY UPDATE
+                first_in_time             = NULL,
+                last_out_time             = NULL,
                 status                    = 'Absent',
                 shift_type                = 'FullDay',
                 worked_mins               = 0,

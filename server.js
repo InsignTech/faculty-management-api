@@ -23,6 +23,7 @@ const pool = require('./config/db');
 // Initialize Cron Jobs
 require('./cron/attendanceCron');
 require('./cron/leaveCron');
+require('./cron/anomalyCheckCron');
 
 debugLog("Step 2: Deployment timestamp...");
 console.log("🔥 NEW DEPLOY -", new Date().toISOString());
