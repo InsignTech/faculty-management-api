@@ -134,13 +134,15 @@ class ReportModel {
                             : (empLeave ? empLeave.leave_type : 'Leave');
                         remark = `${leaveInfo} (Reg)`;
                     }
-                    // If it's a processed non-working day, respect that status
-                    else if (['WeekEnd', 'Public Holiday', 'Exceptional Holiday', 'Vacation', 'Leave'].includes(dayAttendance.status)) {
+                    // If it's a processed non-working day or absent, respect that status
+                    else if (['WeekEnd', 'Public Holiday', 'Exceptional Holiday', 'Vacation', 'Leave', 'Absent'].includes(dayAttendance.status)) {
                         status = dayAttendance.status === 'WeekEnd' ? 'Weekly Off' : dayAttendance.status;
                         if (dayAttendance.status === 'Leave') {
                             remark = dayLeaves.length > 0 
                                 ? dayLeaves.map(l => `${l.leave_type} (${l.leave_half_type || 'FullDay'})`).join(', ')
                                 : (empLeave ? empLeave.leave_type : 'Leave');
+                        } else if (dayAttendance.status === 'Absent') {
+                            remark = '';
                         } else {
                             remark = dayAttendance.status;
                         }
