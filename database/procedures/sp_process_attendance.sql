@@ -326,6 +326,7 @@ BEGIN
             SET v_deduction = 1.00;
             SET v_no_punch_out = 1;
             SET v_shift_type = 'FullDay';
+            SET v_last_out = NULL;
         ELSE
             SET v_no_punch_out = 0;
 
