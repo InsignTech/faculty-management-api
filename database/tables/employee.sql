@@ -20,7 +20,8 @@ CREATE TABLE `employee` (
     'Consultant',
     'DailyWage',
     'Apprentice',
-    'Outsourced'
+    'Outsourced',
+    'Guest'
   ) DEFAULT NULL,
 
   `employment_status` enum(

@@ -44,6 +44,10 @@ BEGIN
     -- Sync active status to user accounts
     UPDATE user_accounts SET active = p_active WHERE employee_id = p_employee_id;
 
-    SELECT ROW_COUNT() AS affected_rows;
+    IF EXISTS(SELECT 1 FROM employee WHERE employee_id = p_employee_id) THEN
+        SELECT 1 AS affected_rows;
+    ELSE
+        SELECT 0 AS affected_rows;
+    END IF;
 END ;;
 DELIMITER ;

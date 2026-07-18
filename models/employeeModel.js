@@ -145,7 +145,7 @@ class EmployeeModel {
           d.departmentname,
           r.role AS role_name,
           des.designation AS designation_name,
-          m.employee_name AS manager_name,
+          TRIM(CONCAT(COALESCE(m.title, ''), ' ', m.employee_name)) AS manager_name,
           mr.role AS manager_role
       FROM employee e
       LEFT JOIN department d ON e.department_id = d.department_id
@@ -204,7 +204,7 @@ class EmployeeModel {
         d.departmentname,
         r.role AS role_name,
         des.designation AS designation_name,
-        m.employee_name AS manager_name,
+        TRIM(CONCAT(COALESCE(m.title, ''), ' ', m.employee_name)) AS manager_name,
         mr.role AS manager_role,
         CASE WHEN e.employee_id = ? THEN 1 ELSE 0 END as is_my_manager
     FROM employee e
