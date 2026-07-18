@@ -7,7 +7,10 @@ CREATE PROCEDURE `sp_get_user_auth_details`(
 BEGIN
     SELECT 
         ua.user_accounts_id,
-        ua.user_display_name,
+        CASE 
+            WHEN e.employee_id IS NOT NULL THEN TRIM(CONCAT(COALESCE(e.title, ''), ' ', e.employee_name))
+            ELSE ua.user_display_name
+        END AS user_display_name,
         ua.user_password,
         ua.email,
         COALESCE(e.role_id, ua.role_id) AS role_id,
