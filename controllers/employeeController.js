@@ -5,6 +5,17 @@ const { sendResponse } = require('../utils/responseHelper');
 const ErrorResponse = require('../utils/errorResponse');
 const { sendWelcomeEmail } = require('../utils/emailService');
 
+const handleDuplicateEmailError = (error, next) => {
+  // MySQL duplicate key error code is 1062 or 'ER_DUP_ENTRY'
+  if ((error.code === 'ER_DUP_ENTRY' || error.errno === 1062) && error.message.includes('uq_active_email')) {
+    return next(new ErrorResponse('An active employee already exists with this email address.', 409, 'CONFLICT'));
+  }
+  if (error.code === 'ER_SIGNAL_NOT_FOUND' || error.sqlState === '45000') {
+    return next(new ErrorResponse(error.message, 409, 'CONFLICT'));
+  }
+  next(error);
+};
+
 const createEmployee = async (req, res, next) => {
   try {
     const { email, employee_name, role_id, employee_code } = req.body;
@@ -36,17 +47,13 @@ const createEmployee = async (req, res, next) => {
 
     sendResponse(res, 201, 'Employee created successfully', result);
   } catch (error) {
-    // Check for MySQL duplicate key error (ER_DUP_ENTRY)
-    if (error.code === 'ER_SIGNAL_NOT_FOUND' || error.sqlState === '45000') {
-      return next(new ErrorResponse(error.message, 409, 'CONFLICT'));
-    }
-    next(error);
+    handleDuplicateEmailError(error, next);
   }
 };
 
 const getEmployees = async (req, res, next) => {
   try {
-    const { search, role, page = 1, limit = 10 } = req.query;
+    const { search, role, page = 1, limit = 10, active = 'all' } = req.query;
     const offset = (page - 1) * limit;
 
     const userRole = req.user.role?.toLowerCase();
@@ -64,8 +71,8 @@ const getEmployees = async (req, res, next) => {
     }
 
     const [employees, total] = await Promise.all([
-      EmployeeModel.getFiltered(search, role, parseInt(limit), parseInt(offset), managerId, myManagerId),
-      EmployeeModel.getTotalCount(search, role, managerId, myManagerId)
+      EmployeeModel.getFiltered(search, role, parseInt(limit), parseInt(offset), managerId, myManagerId, active),
+      EmployeeModel.getTotalCount(search, role, managerId, myManagerId, active)
     ]);
 
     sendResponse(res, 200, 'Employees fetched successfully', {
@@ -140,7 +147,7 @@ const updateEmployee = async (req, res, next) => {
     }
     sendResponse(res, 200, 'Employee updated successfully', result);
   } catch (error) {
-    next(error);
+    handleDuplicateEmailError(error, next);
   }
 };
 
