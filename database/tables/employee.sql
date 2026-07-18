@@ -9,10 +9,47 @@ CREATE TABLE `employee` (
   `profile_picture` varchar(255) DEFAULT NULL,
   `role_id` int DEFAULT NULL,
   `designation_id` int DEFAULT NULL,
-  `employee_type` varchar(45) DEFAULT NULL,
+
+  `employee_type` enum(
+    'Permanent',
+    'Probation',
+    'Contract',
+    'Temporary',
+    'Intern',
+    'Trainee',
+    'Consultant',
+    'DailyWage',
+    'Apprentice',
+    'Outsourced'
+  ) DEFAULT NULL,
+
+  `employment_status` enum(
+    'Active',
+    'ProbationCompleted',
+    'ContractCompleted',
+    'Resigned',
+    'Terminated',
+    'Retired',
+    'OnHold',
+    'Absconded'
+  ) NOT NULL DEFAULT 'Active',
+
+  `status_effective_date` date DEFAULT NULL,
+
+  `remarks` varchar(500) DEFAULT NULL,
+
   `reporting_manager_id` int DEFAULT NULL,
   `joining_date` date DEFAULT NULL,
   `active` tinyint DEFAULT NULL,
+
+  `active_email` varchar(255)
+  GENERATED ALWAYS AS (
+    CASE
+      WHEN `active` = 1 THEN `email`
+      ELSE NULL
+    END
+  ) STORED,
+
   `created_on` datetime DEFAULT CURRENT_TIMESTAMP,
   `created_by` varchar(45) DEFAULT NULL,
   `modified_on` datetime DEFAULT NULL,
@@ -36,7 +73,15 @@ CREATE TABLE `employee` (
   `permanent_address` text,
   `contact_number` varchar(20) DEFAULT NULL,
   `alternative_contact_number` varchar(20) DEFAULT NULL,
+
   PRIMARY KEY (`employee_id`),
+
   UNIQUE KEY `idx_employee_code_unique` (`employee_code`),
-  UNIQUE KEY `idx_employee_email_unique` (`email`)
-) ENGINE=InnoDB AUTO_INCREMENT=1007 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='	';
+
+  UNIQUE KEY `uq_active_email` (`active_email`)
+
+) ENGINE=InnoDB
+  AUTO_INCREMENT=1007
+  DEFAULT CHARSET=utf8mb4
+  COLLATE=utf8mb4_0900_ai_ci
+  COMMENT='';

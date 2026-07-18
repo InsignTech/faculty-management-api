@@ -14,7 +14,11 @@ CREATE PROCEDURE `sp_update_employee`(
     IN p_active TINYINT,
     IN p_modified_by VARCHAR(45),
     IN p_department_id INT,
-    IN p_basic_pay DECIMAL(15,2)
+    IN p_basic_pay DECIMAL(15,2),
+    IN p_employee_type VARCHAR(45),
+    IN p_employment_status VARCHAR(45),
+    IN p_status_effective_date DATE,
+    IN p_remarks VARCHAR(500)
 )
 BEGIN
     UPDATE employee SET
@@ -30,7 +34,11 @@ BEGIN
         modified_by = p_modified_by,
         modified_on = NOW(),
         department_id = p_department_id,
-        basic_pay = p_basic_pay
+        basic_pay = p_basic_pay,
+        employee_type = p_employee_type,
+        employment_status = p_employment_status,
+        status_effective_date = p_status_effective_date,
+        remarks = p_remarks
     WHERE employee_id = p_employee_id;
 
     -- Sync active status to user accounts
