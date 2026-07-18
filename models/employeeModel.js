@@ -39,8 +39,11 @@ class EmployeeModel {
     try {
       await conn.beginTransaction();
 
+      const activeVal = data.active !== undefined ? data.active : 1;
+      const statusVal = data.employment_status || 'Active';
+
       const [rows] = await conn.execute(
-        'CALL sp_create_employee(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'CALL sp_create_employee(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         [
           data.organization_id || 1,
           data.employee_code || '',
@@ -50,10 +53,14 @@ class EmployeeModel {
           data.designation_id || 0,
           reportingManagerId,
           data.joining_date || null,
-          data.active !== undefined ? data.active : 1,
+          activeVal,
           data.created_by || 'admin',
           data.department_id || 0,
-          data.basic_pay || 0.00
+          data.basic_pay || 0.00,
+          data.employee_type || null,
+          statusVal,
+          data.status_effective_date || null,
+          data.remarks || null
         ]
       );
       const employee = rows[0][0];
@@ -190,7 +197,7 @@ class EmployeeModel {
     return rows;
   }
 
-  static async getFiltered(searchTerm = '', roleId = 0, limit = 10, offset = 0, managerId = 0, myManagerId = 0, activeOnly = true) {
+  static async getFiltered(searchTerm = '', roleId = 0, limit = 10, offset = 0, managerId = 0, myManagerId = 0, activeStatus = 'active') {
     const query = `
     SELECT 
         e.*,
@@ -214,7 +221,11 @@ class EmployeeModel {
           OR (e.reporting_manager_id = ?) -- Reports
           OR (e.employee_id = ? AND ? != 0) -- My Manager
         )
-        AND (? = 0 OR e.active = 1)
+        AND (
+          ? = 'all'
+          OR (? = 'active' AND e.active = 1)
+          OR (? = 'inactive' AND e.active = 0)
+        )
     ORDER BY e.employee_id DESC
     LIMIT ? OFFSET ?
   `;
@@ -224,7 +235,7 @@ class EmployeeModel {
     const rId = parseInt(roleId) || 0;
     const mId = parseInt(managerId) || 0;
     const reportToId = parseInt(myManagerId) || 0;
-    const aOnly = activeOnly ? 1 : 0;
+    const statusFilter = activeStatus || 'all';
     const v_limit = parseInt(limit) || 10;
     const v_offset = parseInt(offset) || 0;
 
@@ -235,7 +246,7 @@ class EmployeeModel {
       mId, reportToId,
       mId,
       reportToId, reportToId,
-      aOnly,
+      statusFilter, statusFilter, statusFilter,
       v_limit,
       v_offset
     ]);
@@ -243,7 +254,7 @@ class EmployeeModel {
     return rows;
   }
 
-  static async getTotalCount(searchTerm = '', roleId = 0, managerId = 0, myManagerId = 0, activeOnly = true) {
+  static async getTotalCount(searchTerm = '', roleId = 0, managerId = 0, myManagerId = 0, activeStatus = 'active') {
     const query = `
     SELECT COUNT(*) as total
     FROM employee e
@@ -255,7 +266,11 @@ class EmployeeModel {
           OR (e.reporting_manager_id = ?) -- Reports
           OR (e.employee_id = ? AND ? != 0) -- My Manager
         )
-        AND (? = 0 OR e.active = 1)
+        AND (
+          ? = 'all'
+          OR (? = 'active' AND e.active = 1)
+          OR (? = 'inactive' AND e.active = 0)
+        )
   `;
 
     const term = searchTerm || '';
@@ -263,7 +278,7 @@ class EmployeeModel {
     const rId = parseInt(roleId) || 0;
     const mId = parseInt(managerId) || 0;
     const reportToId = parseInt(myManagerId) || 0;
-    const aOnly = activeOnly ? 1 : 0;
+    const statusFilter = activeStatus || 'all';
 
     const [rows] = await pool.query(query, [
       term, likeTerm, likeTerm,
@@ -271,10 +286,10 @@ class EmployeeModel {
       mId, reportToId,
       mId,
       reportToId, reportToId,
-      aOnly
+      statusFilter, statusFilter, statusFilter
     ]);
 
-    return rows[0].total;
+    return rows[0].total || 0;
   }
 
   static async getPotentialManagers(searchTerm = '', departmentId = 0, excludeId = 0) {
@@ -299,8 +314,13 @@ class EmployeeModel {
   }
 
   static async update(id, data) {
+    let activeVal = data.active !== undefined ? data.active : 1;
+    if (data.employment_status !== undefined) {
+      activeVal = data.employment_status === 'Active' ? 1 : 0;
+    }
+
     const [rows] = await pool.query(
-      'CALL sp_update_employee(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'CALL sp_update_employee(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       [
         id,
         data.organization_id || 1,
@@ -311,10 +331,14 @@ class EmployeeModel {
         data.designation_id || 0,
         data.reporting_manager_id || null,
         data.joining_date || null,
-        data.active !== undefined ? data.active : 1,
+        activeVal,
         data.modified_by || 'admin',
         data.department_id || 0,
-        data.basic_pay || 0.00
+        data.basic_pay || 0.00,
+        data.employee_type || null,
+        data.employment_status || 'Active',
+        data.status_effective_date || null,
+        data.remarks || null
       ]
     );
 
