@@ -249,7 +249,7 @@ class ReportModel {
                 LEFT JOIN employee a1 ON lr.approver_1_id = a1.employee_id
                 LEFT JOIN employee a2 ON lr.approver_2_id = a2.employee_id
                 LEFT JOIN employee ab ON lr.approved_by_id = ab.employee_id
-                WHERE ad.deduction_days > 0
+                WHERE ad.deduction_days > 0 AND e.active = 1
 
                 UNION ALL
 
@@ -289,7 +289,7 @@ class ReportModel {
                 LEFT JOIN employee a1 ON ar.approver_1_id = a1.employee_id
                 LEFT JOIN employee a2 ON ar.approver_2_id = a2.employee_id
                 LEFT JOIN employee ab ON ar.approved_by = ab.employee_id
-                WHERE ad.deduction_days > 0
+                WHERE ad.deduction_days > 0 AND e.active = 1
 
                 UNION ALL
 
@@ -323,7 +323,7 @@ class ReportModel {
                 FROM attendance_daily ad
                 JOIN employee e ON ad.employee_id = e.employee_id
                 LEFT JOIN department dept ON e.department_id = dept.department_id
-                WHERE ad.deduction_days > 0
+                WHERE ad.deduction_days > 0 AND e.active = 1
                   AND NOT EXISTS (
                       SELECT 1 FROM leave_requests lr
                       WHERE lr.employee_id = ad.employee_id 
