@@ -12,7 +12,7 @@ BEGIN
         d.departmentname,
         r.role AS role_name,
         des.designation AS designation_name,
-        m.employee_name AS manager_name
+        TRIM(CONCAT(COALESCE(m.title, ''), ' ', m.employee_name)) AS manager_name
     FROM employee e
     LEFT JOIN department d ON e.department_id = d.department_id
     LEFT JOIN app_role r ON e.role_id = r.role_id
