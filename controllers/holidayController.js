@@ -30,7 +30,7 @@ const getEmployeeHolidays = async (req, res, next) => {
 const saveHoliday = async (req, res, next) => {
   try {
     const { 
-      holiday_id, employee_id, holiday_name, holiday_start_date, 
+      holiday_id, employee_id, employee_ids, holiday_name, holiday_start_date, 
       holiday_end_date, holiday_type, description, is_active 
     } = req.body;
 
@@ -38,9 +38,37 @@ const saveHoliday = async (req, res, next) => {
       return next(new ErrorResponse('Name, start date, and type are required', 400));
     }
 
+    // Handle batch assignment for multiple employees
+    if (!holiday_id && Array.isArray(employee_ids) && employee_ids.length > 0) {
+      const results = [];
+      for (const emp_id of employee_ids) {
+        try {
+          const result = await HolidayModel.saveHoliday({
+            holiday_id,
+            employee_id: emp_id,
+            holiday_name,
+            holiday_start_date,
+            holiday_end_date: holiday_end_date || holiday_start_date,
+            holiday_type,
+            description,
+            is_active: is_active !== undefined ? is_active : 1
+          });
+          results.push({ employee_id: emp_id, success: true, result });
+        } catch (error) {
+          // Gracefully handle duplicate keys (MySQL error ER_DUP_ENTRY / 1062)
+          if (error.code === 'ER_DUP_ENTRY' || error.errno === 1062) {
+            results.push({ employee_id: emp_id, success: false, reason: 'Duplicate entry ignored' });
+          } else {
+            throw error; // Rethrow other database errors
+          }
+        }
+      }
+      return sendResponse(res, 200, 'Holidays assigned to selected employees', results);
+    }
+
     const result = await HolidayModel.saveHoliday({
       holiday_id,
-      employee_id: employee_id || -1,
+      employee_id: employee_id !== undefined ? employee_id : -1,
       holiday_name,
       holiday_start_date,
       holiday_end_date: holiday_end_date || holiday_start_date,
