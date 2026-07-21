@@ -70,23 +70,46 @@ class LeaveModel {
             const approver1 = configRows[0]?.approver_1_id || null;
             const approver2 = configRows[0]?.approver_2_id || null;
 
-            const [rows] = await conn.execute(
-                'CALL sp_apply_leave(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                [
-                    employee_id,
-                    leave_type,
-                    start_date,
-                    end_date,
-                    actualDays,
-                    reason,
-                    attachment_path || null,
-                    substitute_employee_id || null,
-                    approver1,
-                    approver2
-                ]
-            );
+            let rows;
+            try {
+                [rows] = await conn.execute(
+                    'CALL sp_apply_leave(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    [
+                        employee_id,
+                        leave_type,
+                        start_date,
+                        end_date,
+                        actualDays,
+                        reason,
+                        attachment_path || null,
+                        substitute_employee_id || null,
+                        approver1,
+                        approver2,
+                        halfType
+                    ]
+                );
+            } catch (spErr) {
+                [rows] = await conn.execute(
+                    'CALL sp_apply_leave(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    [
+                        employee_id,
+                        leave_type,
+                        start_date,
+                        end_date,
+                        actualDays,
+                        reason,
+                        attachment_path || null,
+                        substitute_employee_id || null,
+                        approver1,
+                        approver2
+                    ]
+                );
+            }
 
             const result = rows[0][0];
+            if (result && result.leave_request_id) {
+                await conn.execute('UPDATE leave_requests SET leave_half_type = ? WHERE leave_request_id = ?', [halfType, result.leave_request_id]);
+            }
 
             // Safety net for half-days total_days
             if (result && result.leave_request_id && (!result.total_days || result.total_days == 0)) {
