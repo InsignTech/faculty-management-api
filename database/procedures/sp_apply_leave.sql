@@ -11,7 +11,8 @@ CREATE PROCEDURE `sp_apply_leave`(
     IN p_attachment_path      VARCHAR(512),
     IN p_substitute_id        INT,
     IN p_approver_1_id        INT,
-    IN p_approver_2_id        INT
+    IN p_approver_2_id        INT,
+    IN p_leave_half_type      VARCHAR(20)
 )
 BEGIN
     DECLARE v_principal_id INT;
@@ -71,6 +72,7 @@ BEGIN
         start_date,
         end_date,
         total_days,
+        leave_half_type,
         reason,
         attachment_path,
         status,
@@ -86,6 +88,7 @@ BEGIN
         p_start_date,
         p_end_date,
         p_total_days,
+        COALESCE(p_leave_half_type, 'FullDay'),
         p_reason,
         p_attachment_path,
         'Pending',

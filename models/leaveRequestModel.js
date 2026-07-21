@@ -148,27 +148,48 @@ class LeaveRequestModel {
       const approver2 = configRows[0]?.approver_2_id || null;
 
       // 3. Call SP to apply leave
-      const [rows] = await conn.execute(
-        'CALL sp_apply_leave(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [
-          employee_id,
-          leave_type,
-          start_date,
-          end_date,
-          requestedDays,
-          reason,
-          attachment_path || null,
-          substitute_employee_id || null,
-          approver1,
-          approver2
-        ]
-      );
+      let rows;
+      try {
+        [rows] = await conn.execute(
+          'CALL sp_apply_leave(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [
+            employee_id,
+            leave_type,
+            start_date,
+            end_date,
+            requestedDays,
+            reason,
+            attachment_path || null,
+            substitute_employee_id || null,
+            approver1,
+            approver2,
+            halfType
+          ]
+        );
+      } catch (spErr) {
+        // Fallback if SP version in database does not accept 11th argument yet
+        [rows] = await conn.execute(
+          'CALL sp_apply_leave(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [
+            employee_id,
+            leave_type,
+            start_date,
+            end_date,
+            requestedDays,
+            reason,
+            attachment_path || null,
+            substitute_employee_id || null,
+            approver1,
+            approver2
+          ]
+        );
+      }
       
       const result = rows[0][0];
 
-      // Update is_paid column
+      // Update is_paid and leave_half_type column
       if (result && result.leave_request_id) {
-          await conn.execute('UPDATE leave_requests SET is_paid = ? WHERE leave_request_id = ?', [isPaid ? 1 : 0, result.leave_request_id]);
+          await conn.execute('UPDATE leave_requests SET is_paid = ?, leave_half_type = ? WHERE leave_request_id = ?', [isPaid ? 1 : 0, halfType, result.leave_request_id]);
       }
 
       // 4. Correct total_days if necessary
