@@ -9,7 +9,7 @@ cron.schedule('30 19 * * *', async () => {
 
     try {
         const today = new Date().toISOString().split('T')[0];
-        
+
         // Find anomalies for today
         const [rows] = await pool.query(
             `SELECT
@@ -28,7 +28,7 @@ cron.schedule('30 19 * * *', async () => {
             WHERE ad.date = CURDATE()
               AND ad.status = 'Present'
               AND (
-                  (ad.first_in_time > '09:20:00' AND (COALESCE(ad.is_late, 0) = 0 OR ad.deduction_days = 0))
+                  (ad.first_in_time > '09:21:00' AND (COALESCE(ad.is_late, 0) = 0 OR ad.deduction_days = 0))
                   OR
                   (ad.last_out_time < '16:00:00' AND (COALESCE(ad.is_early_leaving, 0) = 0 OR ad.deduction_days = 0))
               )
@@ -41,13 +41,13 @@ cron.schedule('30 19 * * *', async () => {
 
         if (rows.length > 0) {
             debugLog(`⏱️  [CRON] Found ${rows.length} attendance anomalies. Sending email report...`, 'WARNING');
-            
+
             await sendAttendanceMismatchReport({
                 toEmails: ['mhdyaseen.official@gmail.com', 'shafeequ.ca@gmail.com'],
                 records: rows,
                 checkDate: today
             });
-            
+
             debugLog('✅ [CRON] Daily anomaly report email sent successfully!', 'SUCCESS');
         } else {
             debugLog('✅ [CRON] Daily anomaly check completed. No anomalies found.', 'SUCCESS');
