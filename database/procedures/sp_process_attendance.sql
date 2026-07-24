@@ -226,7 +226,7 @@ BEGIN
             FROM holiday_master
             WHERE p_date BETWEEN holiday_start_date AND holiday_end_date
               AND is_active = 1
-              AND (employee_id IS NULL OR employee_id = 0 OR employee_id = v_emp_id)
+              AND (employee_id IS NULL OR employee_id = 0 OR employee_id = -1  OR employee_id = v_emp_id)
             ORDER BY holiday_id DESC
             LIMIT 1;
         END;

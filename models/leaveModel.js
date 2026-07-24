@@ -579,7 +579,7 @@ class LeaveModel {
 
             // 2. If it was already Approved, we must reverse the effects
             if (lr.status === 'Approved') {
-                const totalDays = parseFloat(lr.total_working_days) || 0;
+                const totalDays = parseFloat(lr.total_days) || 0;
                 
                 // A. Refund the leave balance
                 await conn.execute(

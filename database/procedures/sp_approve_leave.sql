@@ -125,7 +125,7 @@ proc: BEGIN
         SELECT total_days INTO @v_total_days FROM leave_requests WHERE leave_request_id = p_leave_request_id;
         
         INSERT INTO employee_leaves (emp_id, leave_type, month_year, opening_leave, credited_count, leaves_taken)
-        VALUES (v_emp_id, v_leave_type, DATE_FORMAT(NOW(), '%m-%Y'), 0, 0, @v_total_days)
+        VALUES (v_emp_id, v_leave_type, DATE_FORMAT(v_start_date, '%m-%Y'), 0, 0, @v_total_days)
         ON DUPLICATE KEY UPDATE 
             leaves_taken = leaves_taken + @v_total_days;
 

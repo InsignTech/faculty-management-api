@@ -46,7 +46,7 @@ BEGIN
         SET leaves_taken = leaves_taken - v_total_days
         WHERE emp_id = v_emp_id 
           AND leave_type = v_leave_type 
-          AND month_year = DATE_FORMAT(NOW(), '%m-%Y');
+          AND month_year = DATE_FORMAT(v_start_date, '%m-%Y');
         
         UPDATE attendance_daily
         SET is_leave = 0,
