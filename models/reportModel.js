@@ -443,6 +443,177 @@ class ReportModel {
 
         return report;
     }
+
+    static async getLeaveFlowReport(employeeId) {
+        const query = `
+            SELECT 
+                el.id,
+                el.emp_id,
+                el.leave_type,
+                el.month_year,
+                el.opening_leave,
+                el.credited_count,
+                el.leaves_taken,
+                el.total_leaves,
+                el.balance_leave,
+                COALESCE(approved_req.approved_count, 0) AS approved_count,
+                COALESCE(approved_req.approved_days_sum, 0.00) AS approved_days_sum,
+                COALESCE(cancelled_req.cancelled_count, 0) AS cancelled_count,
+                COALESCE(rejected_req.rejected_count, 0) AS rejected_count,
+                COALESCE(deductions.total_deductions, 0.00) AS total_deductions,
+                COALESCE(adj.reg_pending_count, 0) AS reg_pending_count,
+                COALESCE(adj.reg_approved_count, 0) AS reg_approved_count,
+                COALESCE(adj.od_pending_count, 0) AS od_pending_count,
+                COALESCE(adj.od_approved_count, 0) AS od_approved_count
+            FROM employee_leaves el
+            LEFT JOIN (
+                SELECT 
+                    employee_id, 
+                    leave_type, 
+                    DATE_FORMAT(start_date, '%m-%Y') AS month_year,
+                    COUNT(*) AS approved_count,
+                    SUM(total_days) AS approved_days_sum
+                FROM leave_requests
+                WHERE status = 'Approved'
+                GROUP BY employee_id, leave_type, DATE_FORMAT(start_date, '%m-%Y')
+            ) approved_req ON el.emp_id = approved_req.employee_id 
+                          AND el.leave_type = approved_req.leave_type 
+                          AND el.month_year = approved_req.month_year
+            LEFT JOIN (
+                SELECT 
+                    employee_id, 
+                    leave_type, 
+                    DATE_FORMAT(start_date, '%m-%Y') AS month_year,
+                    COUNT(*) AS cancelled_count
+                FROM leave_requests
+                WHERE status = 'Cancelled'
+                GROUP BY employee_id, leave_type, DATE_FORMAT(start_date, '%m-%Y')
+            ) cancelled_req ON el.emp_id = cancelled_req.employee_id 
+                            AND el.leave_type = cancelled_req.leave_type 
+                            AND el.month_year = cancelled_req.month_year
+            LEFT JOIN (
+                SELECT 
+                    employee_id, 
+                    leave_type, 
+                    DATE_FORMAT(start_date, '%m-%Y') AS month_year,
+                    COUNT(*) AS rejected_count
+                FROM leave_requests
+                WHERE status = 'Rejected'
+                GROUP BY employee_id, leave_type, DATE_FORMAT(start_date, '%m-%Y')
+            ) rejected_req ON el.emp_id = rejected_req.employee_id 
+                          AND el.leave_type = rejected_req.leave_type 
+                          AND el.month_year = rejected_req.month_year
+            LEFT JOIN (
+                SELECT 
+                    employee_id,
+                    DATE_FORMAT(date, '%m-%Y') AS month_year,
+                    SUM(deduction_days) AS total_deductions
+                FROM attendance_daily
+                GROUP BY employee_id, DATE_FORMAT(date, '%m-%Y')
+            ) deductions ON el.emp_id = deductions.employee_id 
+                         AND el.month_year = deductions.month_year
+            LEFT JOIN (
+                SELECT 
+                    employee_id,
+                    DATE_FORMAT(date, '%m-%Y') AS month_year,
+                    SUM(CASE WHEN request_type = 'Regularization' AND status = 'Pending' THEN 1 ELSE 0 END) AS reg_pending_count,
+                    SUM(CASE WHEN request_type = 'Regularization' AND status = 'Approved' THEN 1 ELSE 0 END) AS reg_approved_count,
+                    SUM(CASE WHEN request_type = 'OnDuty' AND status = 'Pending' THEN 1 ELSE 0 END) AS od_pending_count,
+                    SUM(CASE WHEN request_type = 'OnDuty' AND status = 'Approved' THEN 1 ELSE 0 END) AS od_approved_count
+                FROM attendance_regularization
+                GROUP BY employee_id, DATE_FORMAT(date, '%m-%Y')
+            ) adj ON el.emp_id = adj.employee_id 
+                 AND el.month_year = adj.month_year
+            WHERE el.emp_id = ?
+            ORDER BY 
+                CAST(SUBSTRING_INDEX(el.month_year, '-', -1) AS UNSIGNED) DESC, 
+                CAST(SUBSTRING_INDEX(el.month_year, '-', 1) AS UNSIGNED) DESC,
+                el.leave_type
+        `;
+        const [rows] = await pool.execute(query, [employeeId]);
+        return rows;
+    }
+
+    static async getLeaveFlowDetails(employeeId, leaveType, monthYear, status, type = 'Leave') {
+        if (type === 'Leave') {
+            const query = `
+                SELECT 
+                    lr.leave_request_id AS id,
+                    lr.leave_type AS type_name,
+                    DATE_FORMAT(lr.start_date, '%Y-%m-%d') AS start_date,
+                    DATE_FORMAT(lr.end_date, '%Y-%m-%d') AS end_date,
+                    lr.total_days,
+                    lr.leave_half_type AS half_type,
+                    lr.reason,
+                    lr.status,
+                    DATE_FORMAT(lr.applied_on, '%Y-%m-%d %H:%i:%s') AS applied_on,
+                    e.employee_name AS approved_by_name,
+                    DATE_FORMAT(lr.approved_on, '%Y-%m-%d %H:%i:%s') AS approved_on,
+                    lr.rejection_reason
+                FROM leave_requests lr
+                LEFT JOIN employee e ON lr.approved_by_id = e.employee_id
+                WHERE lr.employee_id = ? 
+                  AND lr.leave_type = ? 
+                  AND DATE_FORMAT(lr.start_date, '%m-%Y') = ?
+                  AND lr.status = ?
+                ORDER BY lr.start_date DESC
+            `;
+            const [rows] = await pool.execute(query, [employeeId, leaveType, monthYear, status]);
+            return rows;
+        } else if (type === 'Deduction') {
+            const query = `
+                SELECT 
+                    ad.attendance_id AS id,
+                    'Deduction' AS type_name,
+                    DATE_FORMAT(ad.date, '%Y-%m-%d') AS start_date,
+                    DATE_FORMAT(ad.date, '%Y-%m-%d') AS end_date,
+                    ad.deduction_days AS total_days,
+                    CASE 
+                        WHEN ad.deduction_days = 1.00 THEN 'Full Day'
+                        WHEN ad.deduction_days = 0.50 THEN 'Half Day'
+                        ELSE 'Partial'
+                    END AS half_type,
+                    COALESCE(ad.status, 'Absent') AS reason,
+                    'Deducted' AS status,
+                    DATE_FORMAT(ad.date, '%Y-%m-%d %H:%i:%s') AS applied_on,
+                    'System' AS approved_by_name,
+                    DATE_FORMAT(ad.date, '%Y-%m-%d %H:%i:%s') AS approved_on,
+                    NULL AS rejection_reason
+                FROM attendance_daily ad
+                WHERE ad.employee_id = ? 
+                  AND DATE_FORMAT(ad.date, '%m-%Y') = ?
+                  AND ad.deduction_days > 0
+                ORDER BY ad.date DESC
+            `;
+            const [rows] = await pool.execute(query, [employeeId, monthYear]);
+            return rows;
+        } else {
+            const query = `
+                SELECT 
+                    ar.id,
+                    ar.request_type AS type_name,
+                    DATE_FORMAT(ar.date, '%Y-%m-%d') AS start_date,
+                    DATE_FORMAT(ar.date, '%Y-%m-%d') AS end_date,
+                    1.00 AS total_days,
+                    ar.regularization_shift_type AS half_type,
+                    ar.reason,
+                    ar.status,
+                    DATE_FORMAT(ar.created_on, '%Y-%m-%d %H:%i:%s') AS applied_on,
+                    e.employee_name AS approved_by_name,
+                    DATE_FORMAT(ar.approved_on, '%Y-%m-%d %H:%i:%s') AS approved_on,
+                    NULL AS rejection_reason
+                FROM attendance_regularization ar
+                LEFT JOIN employee e ON ar.approved_by = e.employee_id
+                WHERE ar.employee_id = ? 
+                  AND ar.request_type = ?
+                  AND DATE_FORMAT(ar.date, '%m-%Y') = ?
+                  AND ar.status = ?
+                ORDER BY ar.date DESC
+            `;
+            const [rows] = await pool.execute(query, [employeeId, type, monthYear, status]);
+            return rows;
+        }
+    }
 }
 
 module.exports = ReportModel;

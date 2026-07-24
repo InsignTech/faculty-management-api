@@ -158,9 +158,35 @@ const exportDeductionsReport = async (req, res, next) => {
     } catch (error) { next(error); }
 };
 
+const getLeaveFlowReport = async (req, res, next) => {
+    try {
+        const { employeeId } = req.query;
+        if (!employeeId) {
+            return next(new ErrorResponse('Employee ID is required', 400));
+        }
+
+        const data = await ReportModel.getLeaveFlowReport(employeeId);
+        sendResponse(res, 200, 'Leave flow report fetched successfully', data);
+    } catch (error) { next(error); }
+};
+
+const getLeaveFlowDetails = async (req, res, next) => {
+    try {
+        const { employeeId, leaveType, monthYear, status, type } = req.query;
+        if (!employeeId || !leaveType || !monthYear || !status) {
+            return next(new ErrorResponse('employeeId, leaveType, monthYear, and status are required', 400));
+        }
+
+        const data = await ReportModel.getLeaveFlowDetails(employeeId, leaveType, monthYear, status, type);
+        sendResponse(res, 200, 'Leave flow details fetched successfully', data);
+    } catch (error) { next(error); }
+};
+
 module.exports = {
     getAttendanceReport,
     exportAttendanceReport,
     getDeductionsReport,
-    exportDeductionsReport
+    exportDeductionsReport,
+    getLeaveFlowReport,
+    getLeaveFlowDetails
 };
