@@ -1,4 +1,5 @@
 const ShiftModel = require('../models/shiftModel');
+const pool = require('../config/db');
 const { sendResponse } = require('../utils/responseHelper');
 const ErrorResponse = require('../utils/errorResponse');
 
@@ -13,11 +14,13 @@ const getGlobalShifts = async (req, res, next) => {
 
 const getAllEmployeeShifts = async (req, res, next) => {
   try {
-    const { search, page = 1, limit = 30 } = req.query; // Default to 30 rows (10 assignments)
+    const { search, page = 1, limit = 30, role_id, date } = req.query; // Default to 30 rows (10 assignments)
     const { shifts, total } = await ShiftModel.getAllEmployeeShifts({ 
       search, 
       page: parseInt(page), 
-      limit: parseInt(limit) 
+      limit: parseInt(limit),
+      role_id,
+      date
     });
     sendResponse(res, 200, 'Employee shifts fetched successfully', { shifts, total });
   } catch (error) {
@@ -54,10 +57,10 @@ const updateGlobalShift = async (req, res, next) => {
 
 const assignEmployeeShift = async (req, res, next) => {
   try {
-    const { employee_id, from_date, to_date, shifts } = req.body;
+    const { employee_id, role_id, from_date, to_date, shifts } = req.body;
 
-    if (!employee_id || !from_date || !shifts || shifts.length !== 3) {
-      return next(new ErrorResponse('Employee ID, From Date, and 3 mandatory shift entries are required', 400));
+    if ((!employee_id && !role_id) || !from_date || !shifts || shifts.length !== 3) {
+      return next(new ErrorResponse('Employee ID or Role ID, From Date, and 3 mandatory shift entries are required', 400));
     }
 
     // Date validation
@@ -65,19 +68,42 @@ const assignEmployeeShift = async (req, res, next) => {
         return next(new ErrorResponse('To Date cannot be before From Date', 400));
     }
 
-    await ShiftModel.assignEmployeeShifts(
-      employee_id,
-      from_date,
-      to_date,
-      shifts,
-      req.user.name || 'admin'
-    );
-
-    sendResponse(res, 201, 'Shift assigned successfully to employee');
-  } catch (error) {
-    if (error.message.includes('overlaps')) {
-        return next(new ErrorResponse(error.message, 400, 'OVERLAP_ERROR'));
+    let targetEmployeeIds = [];
+    if (employee_id) {
+      targetEmployeeIds.push(employee_id);
+    } else if (role_id && role_id !== 'all') {
+      const [rows] = await pool.query('SELECT employee_id FROM employee WHERE role_id = ? AND active = 1', [role_id]);
+      targetEmployeeIds = rows.map(r => r.employee_id);
     }
+
+    if (targetEmployeeIds.length === 0) {
+      return next(new ErrorResponse('No active employees found for the selected role', 400));
+    }
+
+    const results = [];
+    let overlapCount = 0;
+    for (const emp_id of targetEmployeeIds) {
+      try {
+        await ShiftModel.assignEmployeeShifts(
+          emp_id,
+          from_date,
+          to_date,
+          shifts,
+          req.user.name || 'admin'
+        );
+        results.push({ employee_id: emp_id, success: true });
+      } catch (error) {
+        if (error.message.includes('overlaps')) {
+          overlapCount++;
+          results.push({ employee_id: emp_id, success: false, reason: 'Overlap error' });
+        } else {
+          throw error;
+        }
+      }
+    }
+
+    sendResponse(res, 201, `Shift assigned to ${targetEmployeeIds.length - overlapCount} employees. (${overlapCount} skipped due to overlap).`, { results });
+  } catch (error) {
     next(error);
   }
 };
@@ -97,10 +123,26 @@ const deleteEmployeeShiftGroup = async (req, res, next) => {
     }
 };
 
+const deleteBulkShifts = async (req, res, next) => {
+  try {
+    const { date, role_id } = req.query;
+
+    if (!date && (!role_id || role_id === 'all')) {
+      return next(new ErrorResponse('Please specify at least a date or a specific role to delete shifts in bulk', 400));
+    }
+
+    const deletedCount = await ShiftModel.deleteBulkShifts({ date, role_id });
+    sendResponse(res, 200, `${deletedCount} shifts deleted successfully`, { deletedCount });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getGlobalShifts,
   getAllEmployeeShifts,
   updateGlobalShift,
   assignEmployeeShift,
-  deleteEmployeeShiftGroup
+  deleteEmployeeShiftGroup,
+  deleteBulkShifts
 };

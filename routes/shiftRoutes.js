@@ -5,7 +5,8 @@ const {
   getAllEmployeeShifts,
   updateGlobalShift,
   assignEmployeeShift,
-  deleteEmployeeShiftGroup
+  deleteEmployeeShiftGroup,
+  deleteBulkShifts
 } = require('../controllers/shiftController');
 const { protect, authorize } = require('../middleware/auth');
 
@@ -18,5 +19,6 @@ router.get('/employees', getAllEmployeeShifts);
 router.put('/global/:id', updateGlobalShift);
 router.post('/assign', assignEmployeeShift);
 router.post('/delete-group', deleteEmployeeShiftGroup);
+router.delete('/delete-bulk', deleteBulkShifts);
 
 module.exports = router;

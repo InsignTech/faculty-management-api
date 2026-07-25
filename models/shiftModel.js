@@ -18,20 +18,27 @@ class ShiftModel {
     return rows;
   }
 
-  // Get all employee-specific shifts with optional search and pagination
-  static async getAllEmployeeShifts({ search = '', page = 1, limit = 10 }) {
+  // Get all employee-specific shifts with optional search, role, date filtering and pagination
+  static async getAllEmployeeShifts({ search = '', page = 1, limit = 10, role_id, date }) {
     const offset = (page - 1) * limit;
-    
-    // We want to paginate by GROUPS of shifts (3 shifts per assignment)
-    // To keep it simple, we'll fetch rows with a limit that is a multiple of 3 if we assume 3 shifts per group
-    // Or better: Paginate by unique (employee_id, start_date) groups
     
     let baseQuery = `
       FROM shift_master s 
       JOIN employee e ON s.employee_id = e.employee_id 
-      WHERE s.employee_id != -1 
+      LEFT JOIN app_role r ON e.role_id = r.role_id
+      WHERE s.employee_id != -1 AND e.active = 1
     `;
     let params = [];
+
+    if (role_id && role_id !== 'all') {
+      baseQuery += ' AND e.role_id = ?';
+      params.push(role_id);
+    }
+
+    if (date) {
+      baseQuery += ' AND s.start_date <= ? AND (s.end_date IS NULL OR s.end_date >= ?)';
+      params.push(date, date);
+    }
 
     if (search) {
       baseQuery += ` AND (e.employee_name LIKE ? OR e.employee_code LIKE ?) `;
@@ -44,13 +51,42 @@ class ShiftModel {
 
     // Get paginated shifts
     const [rows] = await pool.query(`
-      SELECT s.*, DATE_FORMAT(s.start_date, "%Y-%m-%d") as start_date, DATE_FORMAT(s.end_date, "%Y-%m-%d") as end_date, e.employee_name, e.employee_code 
+      SELECT s.*, DATE_FORMAT(s.start_date, "%Y-%m-%d") as start_date, DATE_FORMAT(s.end_date, "%Y-%m-%d") as end_date, 
+             e.employee_name, e.employee_code, r.role as employee_role 
       ${baseQuery}
-      ORDER BY s.created_on DESC 
+      ORDER BY s.start_date ASC, s.created_on DESC 
       LIMIT ? OFFSET ?
     `, [...params, parseInt(limit), parseInt(offset)]);
 
     return { shifts: rows, total };
+  }
+
+  // Bulk delete shifts matching filters
+  static async deleteBulkShifts({ date, role_id }) {
+    let query = 'DELETE s FROM shift_master s';
+    const params = [];
+
+    if (role_id && role_id !== 'all') {
+      query = `
+        DELETE s FROM shift_master s
+        JOIN employee e ON s.employee_id = e.employee_id
+      `;
+    }
+
+    query += ' WHERE s.employee_id != -1';
+
+    if (date) {
+      query += ' AND s.start_date <= ? AND (s.end_date IS NULL OR s.end_date >= ?)';
+      params.push(date, date);
+    }
+
+    if (role_id && role_id !== 'all') {
+      query += ' AND e.role_id = ?';
+      params.push(role_id);
+    }
+
+    const [result] = await pool.query(query, params);
+    return result.affectedRows;
   }
 
   // Update a global shift
