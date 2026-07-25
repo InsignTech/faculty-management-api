@@ -198,6 +198,22 @@ class EmployeeModel {
   }
 
   static async getFiltered(searchTerm = '', roleId = 0, limit = 10, offset = 0, managerId = 0, myManagerId = 0, activeStatus = 'active') {
+    let parsedRoleIds = [];
+    if (roleId) {
+      if (Array.isArray(roleId)) {
+        parsedRoleIds = roleId.map(id => parseInt(id.toString())).filter(id => !isNaN(id) && id > 0);
+      } else if (typeof roleId === 'string') {
+        parsedRoleIds = roleId.split(',').map(id => parseInt(id)).filter(id => !isNaN(id) && id > 0);
+      } else {
+        const singleId = parseInt(roleId.toString());
+        if (!isNaN(singleId) && singleId > 0) {
+          parsedRoleIds = [singleId];
+        }
+      }
+    }
+
+    const roleCondition = parsedRoleIds.length > 0 ? 'AND e.role_id IN (?)' : '';
+
     const query = `
     SELECT 
         e.*,
@@ -215,7 +231,7 @@ class EmployeeModel {
     LEFT JOIN app_role mr ON m.role_id = mr.role_id
     WHERE 
         (? = '' OR e.employee_name LIKE ? OR e.employee_code LIKE ?)
-        AND (? = 0 OR e.role_id = ?)
+        ${roleCondition}
         AND (
           (? = 0 AND ? = 0) -- Admin view
           OR (e.reporting_manager_id = ?) -- Reports
@@ -232,35 +248,55 @@ class EmployeeModel {
 
     const term = searchTerm || '';
     const likeTerm = `%${term}%`;
-    const rId = parseInt(roleId) || 0;
     const mId = parseInt(managerId) || 0;
     const reportToId = parseInt(myManagerId) || 0;
     const statusFilter = activeStatus || 'all';
     const v_limit = parseInt(limit) || 10;
     const v_offset = parseInt(offset) || 0;
 
-    const [rows] = await pool.query(query, [
+    const queryParams = [
       reportToId,
-      term, likeTerm, likeTerm,
-      rId, rId,
+      term, likeTerm, likeTerm
+    ];
+    if (parsedRoleIds.length > 0) {
+      queryParams.push(parsedRoleIds);
+    }
+    queryParams.push(
       mId, reportToId,
       mId,
       reportToId, reportToId,
       statusFilter, statusFilter, statusFilter,
       v_limit,
       v_offset
-    ]);
+    );
 
+    const [rows] = await pool.query(query, queryParams);
     return rows;
   }
 
   static async getTotalCount(searchTerm = '', roleId = 0, managerId = 0, myManagerId = 0, activeStatus = 'active') {
+    let parsedRoleIds = [];
+    if (roleId) {
+      if (Array.isArray(roleId)) {
+        parsedRoleIds = roleId.map(id => parseInt(id.toString())).filter(id => !isNaN(id) && id > 0);
+      } else if (typeof roleId === 'string') {
+        parsedRoleIds = roleId.split(',').map(id => parseInt(id)).filter(id => !isNaN(id) && id > 0);
+      } else {
+        const singleId = parseInt(roleId.toString());
+        if (!isNaN(singleId) && singleId > 0) {
+          parsedRoleIds = [singleId];
+        }
+      }
+    }
+
+    const roleCondition = parsedRoleIds.length > 0 ? 'AND e.role_id IN (?)' : '';
+
     const query = `
     SELECT COUNT(*) as total
     FROM employee e
     WHERE 
         (? = '' OR e.employee_name LIKE ? OR e.employee_code LIKE ?)
-        AND (? = 0 OR e.role_id = ?)
+        ${roleCondition}
         AND (
           (? = 0 AND ? = 0) -- Admin view
           OR (e.reporting_manager_id = ?) -- Reports
@@ -275,20 +311,24 @@ class EmployeeModel {
 
     const term = searchTerm || '';
     const likeTerm = `%${term}%`;
-    const rId = parseInt(roleId) || 0;
     const mId = parseInt(managerId) || 0;
     const reportToId = parseInt(myManagerId) || 0;
     const statusFilter = activeStatus || 'all';
 
-    const [rows] = await pool.query(query, [
-      term, likeTerm, likeTerm,
-      rId, rId,
+    const queryParams = [
+      term, likeTerm, likeTerm
+    ];
+    if (parsedRoleIds.length > 0) {
+      queryParams.push(parsedRoleIds);
+    }
+    queryParams.push(
       mId, reportToId,
       mId,
       reportToId, reportToId,
       statusFilter, statusFilter, statusFilter
-    ]);
+    );
 
+    const [rows] = await pool.query(query, queryParams);
     return rows[0].total || 0;
   }
 
