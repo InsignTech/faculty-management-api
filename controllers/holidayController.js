@@ -126,11 +126,25 @@ const getPersonalHolidays = async (req, res, next) => {
   }
 };
 
+const deleteBulkHolidays = async (req, res, next) => {
+  try {
+    const { date, role_id, year } = req.query;
+    if (!date && (!role_id || role_id === 'all')) {
+      return next(new ErrorResponse('Please specify at least a date or a specific role to delete in bulk', 400));
+    }
+    const deletedCount = await HolidayModel.deleteBulkHolidays({ date, role_id, year });
+    sendResponse(res, 200, `${deletedCount} holidays deleted successfully`, { deletedCount });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getGeneralHolidays,
   getEmployeeHolidays,
   saveHoliday,
   deleteHoliday,
   getUpcomingHolidays,
-  getPersonalHolidays
+  getPersonalHolidays,
+  deleteBulkHolidays
 };

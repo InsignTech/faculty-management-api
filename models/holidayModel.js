@@ -23,7 +23,7 @@ class HolidayModel {
       FROM holiday_master h
       JOIN employee e ON h.employee_id = e.employee_id
       LEFT JOIN app_role r ON e.role_id = r.role_id
-      WHERE h.employee_id != -1
+      WHERE h.employee_id != -1 AND e.active = 1
     `;
     const params = [];
 
@@ -91,6 +91,38 @@ class HolidayModel {
   static async deleteHoliday(id) {
     const [result] = await pool.execute('DELETE FROM holiday_master WHERE holiday_id = ?', [id]);
     return result.affectedRows > 0;
+  }
+
+  static async deleteBulkHolidays({ date, role_id, year }) {
+    let query = 'DELETE h FROM holiday_master h';
+    const params = [];
+
+    if (role_id && role_id !== 'all') {
+      query = `
+        DELETE h FROM holiday_master h
+        JOIN employee e ON h.employee_id = e.employee_id
+      `;
+    }
+
+    query += ' WHERE h.employee_id != -1';
+
+    if (date) {
+      query += ' AND ? BETWEEN h.holiday_start_date AND h.holiday_end_date';
+      params.push(date);
+    }
+
+    if (role_id && role_id !== 'all') {
+      query += ' AND e.role_id = ?';
+      params.push(role_id);
+    }
+
+    if (year) {
+      query += ' AND (YEAR(h.holiday_start_date) = ? OR YEAR(h.holiday_end_date) = ?)';
+      params.push(year, year);
+    }
+
+    const [result] = await pool.query(query, params);
+    return result.affectedRows;
   }
 
   static async getUpcomingHolidays(employeeId) {
