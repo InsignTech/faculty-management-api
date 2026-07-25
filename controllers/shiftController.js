@@ -71,13 +71,18 @@ const assignEmployeeShift = async (req, res, next) => {
     let targetEmployeeIds = [];
     if (employee_id) {
       targetEmployeeIds.push(employee_id);
-    } else if (role_id && role_id !== 'all') {
-      const [rows] = await pool.query('SELECT employee_id FROM employee WHERE role_id = ? AND active = 1', [role_id]);
-      targetEmployeeIds = rows.map(r => r.employee_id);
+    } else if (role_id) {
+      const roleIds = Array.isArray(role_id) ? role_id : [role_id];
+      const activeRoleIds = roleIds.filter(id => id && id !== 'all');
+      
+      if (activeRoleIds.length > 0) {
+        const [rows] = await pool.query('SELECT employee_id FROM employee WHERE role_id IN (?) AND active = 1', [activeRoleIds]);
+        targetEmployeeIds = rows.map(r => r.employee_id);
+      }
     }
 
     if (targetEmployeeIds.length === 0) {
-      return next(new ErrorResponse('No active employees found for the selected role', 400));
+      return next(new ErrorResponse('No active employees found for the selected roles', 400));
     }
 
     const results = [];
