@@ -17,18 +17,29 @@ class HolidayModel {
   }
 
   // Get all employee-specific holidays with search and pagination
-  static async getEmployeeHolidays({ search = '', page = 1, limit = 10, year }) {
+  static async getEmployeeHolidays({ search = '', page = 1, limit = 10, year, role_id, date }) {
     const offset = (page - 1) * limit;
     let baseQuery = `
       FROM holiday_master h
       JOIN employee e ON h.employee_id = e.employee_id
-      WHERE h.employee_id != -1
+      LEFT JOIN app_role r ON e.role_id = r.role_id
+      WHERE h.employee_id != -1 AND e.active = 1
     `;
     const params = [];
 
     if (year) {
       baseQuery += ' AND (YEAR(h.holiday_start_date) = ? OR YEAR(h.holiday_end_date) = ?)';
       params.push(year, year);
+    }
+
+    if (role_id && role_id !== 'all') {
+      baseQuery += ' AND e.role_id = ?';
+      params.push(role_id);
+    }
+
+    if (date) {
+      baseQuery += ' AND ? BETWEEN h.holiday_start_date AND h.holiday_end_date';
+      params.push(date);
     }
 
     if (search) {
@@ -42,9 +53,9 @@ class HolidayModel {
     const [rows] = await pool.query(`
       SELECT h.*, DATE_FORMAT(h.holiday_start_date, "%Y-%m-%d") as holiday_start_date, 
              DATE_FORMAT(h.holiday_end_date, "%Y-%m-%d") as holiday_end_date,
-             e.employee_name, e.employee_code
+             e.employee_name, e.employee_code, r.role as employee_role
       ${baseQuery}
-      ORDER BY h.holiday_start_date DESC
+      ORDER BY h.holiday_start_date ASC
       LIMIT ? OFFSET ?
     `, [...params, parseInt(limit), parseInt(offset)]);
 
@@ -80,6 +91,38 @@ class HolidayModel {
   static async deleteHoliday(id) {
     const [result] = await pool.execute('DELETE FROM holiday_master WHERE holiday_id = ?', [id]);
     return result.affectedRows > 0;
+  }
+
+  static async deleteBulkHolidays({ date, role_id, year }) {
+    let query = 'DELETE h FROM holiday_master h';
+    const params = [];
+
+    if (role_id && role_id !== 'all') {
+      query = `
+        DELETE h FROM holiday_master h
+        JOIN employee e ON h.employee_id = e.employee_id
+      `;
+    }
+
+    query += ' WHERE h.employee_id != -1';
+
+    if (date) {
+      query += ' AND ? BETWEEN h.holiday_start_date AND h.holiday_end_date';
+      params.push(date);
+    }
+
+    if (role_id && role_id !== 'all') {
+      query += ' AND e.role_id = ?';
+      params.push(role_id);
+    }
+
+    if (year) {
+      query += ' AND (YEAR(h.holiday_start_date) = ? OR YEAR(h.holiday_end_date) = ?)';
+      params.push(year, year);
+    }
+
+    const [result] = await pool.query(query, params);
+    return result.affectedRows;
   }
 
   static async getUpcomingHolidays(employeeId) {

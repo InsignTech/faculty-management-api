@@ -5,7 +5,8 @@ const {
   saveHoliday, 
   deleteHoliday,
   getUpcomingHolidays,
-  getPersonalHolidays
+  getPersonalHolidays,
+  deleteBulkHolidays
 } = require('../controllers/holidayController');
 const { protect, authorize } = require('../middleware/auth');
 const router = express.Router();
@@ -23,5 +24,6 @@ router.get('/general', getGeneralHolidays);
 router.get('/employees', getEmployeeHolidays);
 router.post('/', saveHoliday);
 router.delete('/:id', deleteHoliday);
+router.delete('/', deleteBulkHolidays);
 
 module.exports = router;
