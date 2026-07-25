@@ -17,11 +17,12 @@ class HolidayModel {
   }
 
   // Get all employee-specific holidays with search and pagination
-  static async getEmployeeHolidays({ search = '', page = 1, limit = 10, year }) {
+  static async getEmployeeHolidays({ search = '', page = 1, limit = 10, year, role_id, date }) {
     const offset = (page - 1) * limit;
     let baseQuery = `
       FROM holiday_master h
       JOIN employee e ON h.employee_id = e.employee_id
+      LEFT JOIN app_role r ON e.role_id = r.role_id
       WHERE h.employee_id != -1
     `;
     const params = [];
@@ -29,6 +30,16 @@ class HolidayModel {
     if (year) {
       baseQuery += ' AND (YEAR(h.holiday_start_date) = ? OR YEAR(h.holiday_end_date) = ?)';
       params.push(year, year);
+    }
+
+    if (role_id && role_id !== 'all') {
+      baseQuery += ' AND e.role_id = ?';
+      params.push(role_id);
+    }
+
+    if (date) {
+      baseQuery += ' AND ? BETWEEN h.holiday_start_date AND h.holiday_end_date';
+      params.push(date);
     }
 
     if (search) {
@@ -42,9 +53,9 @@ class HolidayModel {
     const [rows] = await pool.query(`
       SELECT h.*, DATE_FORMAT(h.holiday_start_date, "%Y-%m-%d") as holiday_start_date, 
              DATE_FORMAT(h.holiday_end_date, "%Y-%m-%d") as holiday_end_date,
-             e.employee_name, e.employee_code
+             e.employee_name, e.employee_code, r.role as employee_role
       ${baseQuery}
-      ORDER BY h.holiday_start_date DESC
+      ORDER BY h.holiday_start_date ASC
       LIMIT ? OFFSET ?
     `, [...params, parseInt(limit), parseInt(offset)]);
 

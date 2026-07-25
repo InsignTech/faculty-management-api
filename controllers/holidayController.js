@@ -14,12 +14,14 @@ const getGeneralHolidays = async (req, res, next) => {
 
 const getEmployeeHolidays = async (req, res, next) => {
   try {
-    const { search, page, limit, year } = req.query;
+    const { search, page, limit, year, role_id, date } = req.query;
     const data = await HolidayModel.getEmployeeHolidays({
       search,
       page: parseInt(page) || 1,
       limit: parseInt(limit) || 10,
-      year
+      year,
+      role_id,
+      date
     });
     sendResponse(res, 200, 'Employee holidays fetched successfully', data);
   } catch (error) {
