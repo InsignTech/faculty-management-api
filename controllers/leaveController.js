@@ -28,15 +28,38 @@ const applyLeave = async (req, res, next) => {
         const {
             leave_type, start_date, end_date, total_days,
             leave_half_type, reason, attachment_path,
-            substitute_employee_id
+            substitute_employee_id, employee_id
         } = req.body;
 
         if (!leave_type || !start_date || !end_date || !total_days) {
             return next(new ErrorResponse('Please provide all required fields', 400));
         }
 
+        let targetEmployeeId = req.user.employeeId;
+        let isProxy = 0;
+        let appliedById = req.user.employeeId;
+
+        if (employee_id && parseInt(employee_id) !== req.user.employeeId) {
+            const targetId = parseInt(employee_id);
+            const userRole = req.user.role?.toLowerCase();
+            const isAuthorizedUser = ['admin', 'super_admin', 'principal', 'hr'].includes(userRole);
+            
+            let isDelegated = false;
+            if (!isAuthorizedUser) {
+                const DelegationModel = require('../models/delegationModel');
+                isDelegated = await DelegationModel.checkDelegationExists(req.user.employeeId, targetId);
+            }
+
+            if (!isAuthorizedUser && !isDelegated) {
+                return next(new ErrorResponse('You are not authorized to submit requests on behalf of this employee.', 403));
+            }
+
+            targetEmployeeId = targetId;
+            isProxy = 1;
+        }
+
         const result = await LeaveModel.apply({
-            employee_id: req.user.employeeId,
+            employee_id: targetEmployeeId,
             leave_type,
             start_date,
             end_date,
@@ -44,7 +67,9 @@ const applyLeave = async (req, res, next) => {
             leave_half_type,
             reason,
             attachment_path,
-            substitute_employee_id: substitute_employee_id || null
+            substitute_employee_id: substitute_employee_id || null,
+            applied_by_id: appliedById,
+            is_proxy: isProxy
         });
 
         sendResponse(res, 201, 'Leave request submitted successfully', result);

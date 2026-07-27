@@ -21,11 +21,15 @@ CREATE TABLE `attendance_regularization` (
   `approver_1_action_on` datetime DEFAULT NULL,
   `approver_2_remarks` text,
   `approver_2_action_on` datetime DEFAULT NULL,
+  `applied_by_id` int DEFAULT NULL,
+  `is_proxy` tinyint DEFAULT '0',
   PRIMARY KEY (`id`),
   KEY `fk_ar_substitute` (`substitute_employee_id`),
   KEY `fk_ar_approver1` (`approver_1_id`),
   KEY `fk_ar_approver2` (`approver_2_id`),
+  KEY `fk_reg_applied_by` (`applied_by_id`),
   CONSTRAINT `fk_ar_approver1` FOREIGN KEY (`approver_1_id`) REFERENCES `employee` (`employee_id`),
   CONSTRAINT `fk_ar_approver2` FOREIGN KEY (`approver_2_id`) REFERENCES `employee` (`employee_id`),
-  CONSTRAINT `fk_ar_substitute` FOREIGN KEY (`substitute_employee_id`) REFERENCES `employee` (`employee_id`)
+  CONSTRAINT `fk_ar_substitute` FOREIGN KEY (`substitute_employee_id`) REFERENCES `employee` (`employee_id`),
+  CONSTRAINT `fk_reg_applied_by` FOREIGN KEY (`applied_by_id`) REFERENCES `employee` (`employee_id`)
 ) ENGINE=InnoDB AUTO_INCREMENT=226 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;

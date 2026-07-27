@@ -221,9 +221,9 @@ class AttendanceModel {
                     // 3. Insert
                     await conn.execute(
                         `INSERT INTO attendance_regularization 
-                        (employee_id, request_type, date, requested_in_time, requested_out_time, regularization_shift_type, reason, status, created_on, substitute_employee_id, approver_1_id, approver_2_id) 
-                        VALUES (?, ?, ?, ?, ?, ?, ?, 'Pending', NOW(), ?, ?, ?)`,
-                        [employee_id, type, d, requested_in_time || null, requested_out_time || null, regularization_shift_type || 'FullDay', reason, substitute_employee_id || null, approver1, approver2]
+                        (employee_id, request_type, date, requested_in_time, requested_out_time, regularization_shift_type, reason, status, created_on, substitute_employee_id, approver_1_id, approver_2_id, applied_by_id, is_proxy) 
+                        VALUES (?, ?, ?, ?, ?, ?, ?, 'Pending', NOW(), ?, ?, ?, ?, ?)`,
+                        [employee_id, type, d, requested_in_time || null, requested_out_time || null, regularization_shift_type || 'FullDay', reason, substitute_employee_id || null, approver1, approver2, data.applied_by_id || null, data.is_proxy || 0]
                     );
                 }
 
@@ -329,9 +329,9 @@ class AttendanceModel {
 
         const [result] = await pool.execute(
             `INSERT INTO attendance_regularization 
-            (employee_id, request_type, date, requested_in_time, requested_out_time, regularization_shift_type, reason, status, created_on, substitute_employee_id, approver_1_id, approver_2_id) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'Pending', NOW(), ?, ?, ?)`,
-            [employee_id, type, targetDate, requested_in_time || null, requested_out_time || null, regularization_shift_type || 'FullDay', reason, substitute_employee_id || null, approver1, approver2]
+            (employee_id, request_type, date, requested_in_time, requested_out_time, regularization_shift_type, reason, status, created_on, substitute_employee_id, approver_1_id, approver_2_id, applied_by_id, is_proxy) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'Pending', NOW(), ?, ?, ?, ?, ?)`,
+            [employee_id, type, targetDate, requested_in_time || null, requested_out_time || null, regularization_shift_type || 'FullDay', reason, substitute_employee_id || null, approver1, approver2, data.applied_by_id || null, data.is_proxy || 0]
         );
 
         return { adjustment_id: result.insertId };
@@ -618,12 +618,15 @@ class AttendanceModel {
                    ad.last_out_time AS actual_out_time,
                    ad.status AS actual_status,
                    sub.employee_name AS substitute_name,
-                   sub.employee_code AS substitute_code
+                   sub.employee_code AS substitute_code,
+                   ap_proxy.employee_name AS applied_by_name,
+                   ap_proxy.employee_code AS applied_by_code
             FROM attendance_regularization aj 
             LEFT JOIN employee e ON aj.approved_by = e.employee_id 
             LEFT JOIN employee ea1 ON ea1.employee_id = aj.approver_1_id
             LEFT JOIN employee ea2 ON ea2.employee_id = aj.approver_2_id
             LEFT JOIN employee sub ON sub.employee_id = aj.substitute_employee_id
+            LEFT JOIN employee ap_proxy ON ap_proxy.employee_id = aj.applied_by_id
             LEFT JOIN attendance_daily ad ON ad.employee_id = aj.employee_id AND ad.date = aj.date
             WHERE aj.employee_id = ?
         `;
@@ -717,7 +720,9 @@ class AttendanceModel {
                        ad.last_out_time AS actual_out_time,
                        ad.status AS actual_status,
                        sub.employee_name AS substitute_name,
-                       sub.employee_code AS substitute_code
+                       sub.employee_code AS substitute_code,
+                       ap_proxy.employee_name AS applied_by_name,
+                       ap_proxy.employee_code AS applied_by_code
                 FROM attendance_regularization aj
                 JOIN employee e ON aj.employee_id = e.employee_id
                 LEFT JOIN department d ON e.department_id = d.department_id
@@ -726,6 +731,7 @@ class AttendanceModel {
                 LEFT JOIN employee ea1 ON ea1.employee_id = aj.approver_1_id
                 LEFT JOIN employee ea2 ON ea2.employee_id = aj.approver_2_id
                 LEFT JOIN employee sub ON sub.employee_id = aj.substitute_employee_id
+                LEFT JOIN employee ap_proxy ON ap_proxy.employee_id = aj.applied_by_id
                 LEFT JOIN attendance_daily ad ON ad.employee_id = aj.employee_id AND ad.date = aj.date
                 WHERE 1=1
                 ${statusFilter ? 'AND aj.status = ?' : ""}
@@ -762,7 +768,9 @@ class AttendanceModel {
                        ad.last_out_time AS actual_out_time,
                        ad.status AS actual_status,
                        sub.employee_name AS substitute_name,
-                       sub.employee_code AS substitute_code
+                       sub.employee_code AS substitute_code,
+                       ap_proxy.employee_name AS applied_by_name,
+                       ap_proxy.employee_code AS applied_by_code
                 FROM attendance_regularization aj
                 JOIN employee e ON aj.employee_id = e.employee_id
                 LEFT JOIN department d ON e.department_id = d.department_id
@@ -771,6 +779,7 @@ class AttendanceModel {
                 LEFT JOIN employee ea1 ON ea1.employee_id = aj.approver_1_id
                 LEFT JOIN employee ea2 ON ea2.employee_id = aj.approver_2_id
                 LEFT JOIN employee sub ON sub.employee_id = aj.substitute_employee_id
+                LEFT JOIN employee ap_proxy ON ap_proxy.employee_id = aj.applied_by_id
                 LEFT JOIN attendance_daily ad ON ad.employee_id = aj.employee_id AND ad.date = aj.date
                 WHERE (aj.employee_id IN (SELECT employee_id FROM subordinates)
                    ${approverConditions})

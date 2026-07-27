@@ -131,17 +131,41 @@ const getIrregularDays = async (req, res, next) => {
 
 const requestAdjustment = async (req, res, next) => {
     try {
-        const employeeId = req.user.employeeId;
-        if (!employeeId) return next(new ErrorResponse('User is not associated with an employee record', 400, 'MISSING_EMPLOYEE_RECORD'));
-
         const {
             type, date, from_date, to_date,
             requested_in_time, requested_out_time, punch_time,
             regularization_shift_type,
             reason, remarks,
             attachment_path,
-            substitute_employee_id
+            substitute_employee_id, employee_id
         } = req.body;
+
+        let targetEmployeeId = req.user.employeeId;
+        let isProxy = 0;
+        let appliedById = req.user.employeeId;
+
+        if (employee_id && parseInt(employee_id) !== req.user.employeeId) {
+            const targetId = parseInt(employee_id);
+            const userRole = req.user.role?.toLowerCase();
+            const isAuthorizedUser = ['admin', 'super_admin', 'principal', 'hr'].includes(userRole);
+            
+            let isDelegated = false;
+            if (!isAuthorizedUser) {
+                const DelegationModel = require('../models/delegationModel');
+                isDelegated = await DelegationModel.checkDelegationExists(req.user.employeeId, targetId);
+            }
+
+            if (!isAuthorizedUser && !isDelegated) {
+                return next(new ErrorResponse('You are not authorized to submit requests on behalf of this employee.', 403));
+            }
+
+            targetEmployeeId = targetId;
+            isProxy = 1;
+        }
+
+        if (!targetEmployeeId) {
+            return next(new ErrorResponse('User is not associated with an employee record', 400, 'MISSING_EMPLOYEE_RECORD'));
+        }
 
         // Validation: require type
         if (!type) {
@@ -157,7 +181,7 @@ const requestAdjustment = async (req, res, next) => {
         }
 
         const result = await AttendanceModel.requestAdjustment({
-            employee_id: employeeId,
+            employee_id: targetEmployeeId,
             type,
             date,
             from_date,
@@ -167,7 +191,9 @@ const requestAdjustment = async (req, res, next) => {
             regularization_shift_type,
             reason: reason || remarks,
             attachment_path,
-            substitute_employee_id: substitute_employee_id || null
+            substitute_employee_id: substitute_employee_id || null,
+            applied_by_id: appliedById,
+            is_proxy: isProxy
         });
 
         sendResponse(res, 201, 'Adjustment request submitted successfully', result);
@@ -176,13 +202,30 @@ const requestAdjustment = async (req, res, next) => {
 
 const getMyAdjustments = async (req, res, next) => {
     try {
-        const employeeId = req.user.employeeId;
-        if (!employeeId) return next(new ErrorResponse('User is not associated with an employee record', 400, 'MISSING_EMPLOYEE_RECORD'));
+        const loggedInEmpId = req.user.employeeId;
+        const targetEmpId = req.query.employeeId || loggedInEmpId;
+
+        if (!targetEmpId) return next(new ErrorResponse('User is not associated with an employee record', 400, 'MISSING_EMPLOYEE_RECORD'));
+
+        // Permission check
+        const userRole = req.user.role?.toLowerCase();
+        const isAdmin = ['admin', 'super_admin', 'principal', 'hr'].includes(userRole);
+
+        if (!isAdmin && parseInt(targetEmpId) !== parseInt(loggedInEmpId)) {
+            const DelegationModel = require('../models/delegationModel');
+            const isDelegated = await DelegationModel.checkDelegationExists(loggedInEmpId, targetEmpId);
+            if (!isDelegated) {
+                const isSub = await EmployeeModel.isSubordinate(loggedInEmpId, targetEmpId);
+                if (!isSub) {
+                    return next(new ErrorResponse('You are not authorized to view this employee\'s adjustments', 403, 'FORBIDDEN'));
+                }
+            }
+        }
 
         const month = req.query.month || null;
         const year = req.query.year || null;
 
-        const adjustments = await AttendanceModel.getEmployeeAdjustments(employeeId, month, year);
+        const adjustments = await AttendanceModel.getEmployeeAdjustments(targetEmpId, month, year);
         sendResponse(res, 200, 'Adjustment history fetched', adjustments);
     } catch (error) { next(error); }
 };
