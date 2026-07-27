@@ -1,6 +1,7 @@
 const LeaveRequestModel = require('../models/leaveRequestModel');
 const { sendResponse } = require('../utils/responseHelper');
 const pool = require('../config/db');
+const ErrorResponse = require('../utils/errorResponse');
 
 const getLeaveRequests = async (req, res, next) => {
   try {
@@ -40,7 +41,36 @@ const getEmployeeBalance = async (req, res, next) => {
 
 const createLeaveRequest = async (req, res, next) => {
   try {
-    const result = await LeaveRequestModel.create(req.body);
+    const { employee_id } = req.body;
+    let targetEmployeeId = req.user.employeeId;
+    let isProxy = 0;
+    let appliedById = req.user.employeeId;
+
+    if (employee_id && parseInt(employee_id) !== req.user.employeeId) {
+        const targetId = parseInt(employee_id);
+        const userRole = req.user.role?.toLowerCase();
+        const isAuthorizedUser = ['admin', 'super_admin', 'principal', 'hr'].includes(userRole);
+        
+        let isDelegated = false;
+        if (!isAuthorizedUser) {
+            const DelegationModel = require('../models/delegationModel');
+            isDelegated = await DelegationModel.checkDelegationExists(req.user.employeeId, targetId);
+        }
+
+        if (!isAuthorizedUser && !isDelegated) {
+            return next(new ErrorResponse('You are not authorized to submit requests on behalf of this employee.', 403));
+        }
+
+        targetEmployeeId = targetId;
+        isProxy = 1;
+    }
+
+    const result = await LeaveRequestModel.create({
+        ...req.body,
+        employee_id: targetEmployeeId,
+        applied_by_id: appliedById,
+        is_proxy: isProxy
+    });
     sendResponse(res, 201, 'Leave application submitted successfully', result);
   } catch (error) {
     next(error);

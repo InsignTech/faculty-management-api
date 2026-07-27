@@ -7,12 +7,15 @@ class LeaveRequestModel {
       SELECT lr.*, e.employee_name, e.employee_code as emp_code,
              a1.employee_name AS approver_1_name,
              a2.employee_name AS approver_2_name,
-             sub.employee_name AS substitute_name
+             sub.employee_name AS substitute_name,
+             ap.employee_name AS applied_by_name,
+             ap.employee_code AS applied_by_code
       FROM leave_requests lr
       JOIN employee e ON lr.employee_id = e.employee_id
       LEFT JOIN employee a1 ON a1.employee_id = lr.approver_1_id
       LEFT JOIN employee a2 ON a2.employee_id = lr.approver_2_id
       LEFT JOIN employee sub ON sub.employee_id = lr.substitute_employee_id
+      LEFT JOIN employee ap ON ap.employee_id = lr.applied_by_id
       WHERE 1=1
     `;
     const params = [];
@@ -37,12 +40,15 @@ class LeaveRequestModel {
       SELECT lr.*, e.employee_name, e.employee_code as emp_code,
              a1.employee_name AS approver_1_name,
              a2.employee_name AS approver_2_name,
-             sub.employee_name AS substitute_name
+             sub.employee_name AS substitute_name,
+             ap.employee_name AS applied_by_name,
+             ap.employee_code AS applied_by_code
       FROM leave_requests lr
       JOIN employee e ON lr.employee_id = e.employee_id
       LEFT JOIN employee a1 ON a1.employee_id = lr.approver_1_id
       LEFT JOIN employee a2 ON a2.employee_id = lr.approver_2_id
       LEFT JOIN employee sub ON sub.employee_id = lr.substitute_employee_id
+      LEFT JOIN employee ap ON ap.employee_id = lr.applied_by_id
       WHERE e.reporting_manager_id = ?
          OR lr.approver_1_id = ?
          OR lr.approver_2_id = ?
@@ -187,9 +193,14 @@ class LeaveRequestModel {
       
       const result = rows[0][0];
 
-      // Update is_paid and leave_half_type column
+      // Update is_paid, leave_half_type, applied_by_id, and is_proxy
       if (result && result.leave_request_id) {
-          await conn.execute('UPDATE leave_requests SET is_paid = ?, leave_half_type = ? WHERE leave_request_id = ?', [isPaid ? 1 : 0, halfType, result.leave_request_id]);
+          await conn.execute(
+              `UPDATE leave_requests 
+               SET is_paid = ?, leave_half_type = ?, applied_by_id = ?, is_proxy = ? 
+               WHERE leave_request_id = ?`, 
+              [isPaid ? 1 : 0, halfType, data.applied_by_id || null, data.is_proxy || 0, result.leave_request_id]
+          );
       }
 
       // 4. Correct total_days if necessary
