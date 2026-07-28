@@ -15,7 +15,8 @@ router.route('/periods')
     .post(payrollController.createPeriod);
 
 router.route('/periods/:id')
-    .put(authorize('super_admin', 'Admin', 'Principal'), payrollController.updatePeriod);
+    .put(authorize('super_admin', 'Admin', 'Principal'), payrollController.updatePeriod)
+    .delete(authorize('super_admin', 'Admin', 'Principal'), payrollController.deletePeriod);
 
 // --- Deduction Rules ---
 router.route('/deduction-rules')

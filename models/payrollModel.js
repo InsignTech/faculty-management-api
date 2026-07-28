@@ -25,6 +25,27 @@ class PayrollModel {
         return result.affectedRows;
     }
 
+    static async deletePeriod(id) {
+        // 1. Check if there are disbursements
+        const [disbRows] = await pool.execute(
+            'SELECT COUNT(*) AS count FROM salary_disbursement WHERE period_id = ?',
+            [id]
+        );
+        if (disbRows[0].count > 0) {
+            throw new Error('Cannot delete payroll period because payroll has already been calculated. Please delete the calculated payroll first.');
+        }
+
+        // 2. Delete any leftover logs
+        await pool.execute('DELETE FROM payroll_approval_log WHERE period_id = ?', [id]);
+
+        // 3. Delete the period
+        const [result] = await pool.execute(
+            'DELETE FROM payroll_period WHERE period_id = ?',
+            [id]
+        );
+        return result.affectedRows;
+    }
+
     // --- Deduction Rules ---
     static async getDeductionRules() {
         const [rows] = await pool.execute('SELECT * FROM deduction_rule_master ORDER BY display_order ASC');
