@@ -57,6 +57,19 @@ const updatePeriod = async (req, res, next) => {
     } catch (e) { next(e); }
 };
 
+const deletePeriod = async (req, res, next) => {
+    try {
+        const affected = await PayrollModel.deletePeriod(req.params.id);
+        if (affected === 0) return next(new ErrorResponse('Period not found', 404));
+        sendResponse(res, 200, 'Period deleted successfully');
+    } catch (e) {
+        if (e.message.includes('calculated')) {
+            return next(new ErrorResponse(e.message, 400));
+        }
+        next(e);
+    }
+};
+
 // --- Deduction Rules ---
 const getDeductionRules = async (req, res, next) => {
     try {
@@ -400,6 +413,7 @@ module.exports = {
     getPeriods,
     createPeriod,
     updatePeriod,
+    deletePeriod,
     getDeductionRules,
     createDeductionRule,
     updateDeductionRule,

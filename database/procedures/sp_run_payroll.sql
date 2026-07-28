@@ -43,6 +43,8 @@ BEGIN
     DECLARE v_tds_amount DECIMAL(15,2);
     DECLARE v_bus_fee DECIMAL(15,2);
     DECLARE v_json_deductions JSON;
+    DECLARE v_joining_date DATE;
+    DECLARE v_effective_joining_date DATE;
     DECLARE v_epf_rule_basis VARCHAR(50);
     DECLARE v_epf_rule_rate DECIMAL(10,4);
     DECLARE v_esi_rule_basis VARCHAR(50);
@@ -101,6 +103,7 @@ BEGIN
         
         -- Get active structure for employee
         SET v_struct_id = NULL;
+        SET v_joining_date = NULL;
         BEGIN
             DECLARE CONTINUE HANDLER FOR NOT FOUND BEGIN END;
             SELECT structure_id, basic_pay, hra, educational_allowance, special_allowance, naac_allowance, gross_salary
@@ -108,6 +111,19 @@ BEGIN
             FROM salary_structure
             WHERE employee_id = v_emp_id AND is_current = 1
             LIMIT 1;
+        END;
+
+        -- Get joining date
+        BEGIN
+            DECLARE CONTINUE HANDLER FOR NOT FOUND BEGIN END;
+            SELECT joining_date INTO v_joining_date FROM employee WHERE employee_id = v_emp_id;
+        END;
+        
+        -- Cap joining date so it doesn't exceed the end of the period (helps if future date is accidentally set)
+        SET v_effective_joining_date = CASE 
+            WHEN v_joining_date IS NULL THEN v_start_date
+            WHEN v_joining_date > DATE_ADD(v_end_date, INTERVAL 1 DAY) THEN DATE_ADD(v_end_date, INTERVAL 1 DAY)
+            ELSE v_joining_date
         END;
         
         -- If no salary structure is defined, skip or create default empty
@@ -131,9 +147,9 @@ BEGIN
             WHERE employee_id = v_emp_id AND date BETWEEN v_start_date AND v_end_date;
 
             IF v_attendance_count = 0 THEN
-                -- No records at all. Calculate all working days as LOP (excluding Sundays and holidays)
+                -- No records at all. Calculate working days in active period as LOP
                 SET v_weekend_holiday_count = 0;
-                SET v_temp_date = v_start_date;
+                SET v_temp_date = CASE WHEN v_effective_joining_date > v_start_date THEN v_effective_joining_date ELSE v_start_date END;
                 WHILE v_temp_date <= v_end_date DO
                     IF DAYOFWEEK(v_temp_date) = 1 OR EXISTS (
                         SELECT 1 FROM holiday_master
@@ -145,13 +161,24 @@ BEGIN
                     END IF;
                     SET v_temp_date = DATE_ADD(v_temp_date, INTERVAL 1 DAY);
                 END WHILE;
-                SET v_lop_days = v_days_in_period - v_weekend_holiday_count;
+                
+                SET v_lop_days = DATEDIFF(v_end_date, CASE WHEN v_effective_joining_date > v_start_date THEN v_effective_joining_date ELSE v_start_date END) + 1 - v_weekend_holiday_count;
             ELSE
                 -- Calculate LOP days from attendance_daily
                 SELECT COALESCE(SUM(deduction_days), 0)
                 INTO v_lop_days
                 FROM attendance_daily
                 WHERE employee_id = v_emp_id AND date BETWEEN v_start_date AND v_end_date;
+            END IF;
+            
+            -- Add pre-joining days in the current period as LOP days
+            IF v_effective_joining_date IS NOT NULL AND v_effective_joining_date > v_start_date THEN
+                SET v_lop_days = v_lop_days + DATEDIFF(v_effective_joining_date, v_start_date);
+            END IF;
+            
+            -- Ensure LOP days do not exceed the divisor/period days
+            IF v_lop_days > v_days_in_period THEN
+                SET v_lop_days = v_days_in_period;
             END IF;
             
             -- LOP deduction amount
