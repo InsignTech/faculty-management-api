@@ -19,6 +19,7 @@ async function generateExcelStatement(periodId, sortBy = 'id') {
     const [disbursements] = await pool.execute(`
         SELECT sd.*, 
                e.employee_name, 
+               e.title,
                e.employee_code, 
                e.joining_date,
                r.role,
@@ -30,7 +31,6 @@ async function generateExcelStatement(periodId, sortBy = 'id') {
         LEFT JOIN department d ON e.department_id = d.department_id
         LEFT JOIN designation des ON e.designation_id = des.designation_id
         WHERE sd.period_id = ?
-        ORDER BY ${orderClause}
     `, [periodId]);
 
     const templatePath = path.join(__dirname, '..', 'APRIL 2026 -1.xlsx');
@@ -86,25 +86,22 @@ async function generateExcelStatement(periodId, sortBy = 'id') {
         }
     }
 
-    const salaryDisbs = [];
+    // Sort alphabetically by employee_name (ignoring title during sort)
+    disbursements.sort((a, b) => a.employee_name.localeCompare(b.employee_name));
+
+    // Format display names with titles for presentation
+    disbursements.forEach(d => {
+        const titleStr = d.title ? `${d.title.trim()} ` : '';
+        d.full_display_name = `${titleStr}${d.employee_name}`;
+    });
+
+    const salaryDisbs = disbursements;
     const remuDisbs = [];
 
-    disbursements.forEach(d => {
-        const norm = d.employee_name.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
-        if (templateRemuNames.has(norm)) {
-            remuDisbs.push(d);
-        } else if (templateSalaryNames.has(norm)) {
-            salaryDisbs.push(d);
-        } else {
-            const role = (d.role || '').toUpperCase();
-            const designation = (d.designation_name || '').toUpperCase();
-            if (role === 'GUEST / TEMP' || role === 'GENERAL' || designation === 'SECURITY') {
-                remuDisbs.push(d);
-            } else {
-                salaryDisbs.push(d);
-            }
-        }
-    });
+    console.log(`[Excel Export] Total disbursements fetched: ${disbursements.length}`);
+    console.log(`[Excel Export] Salary count: ${salaryDisbs.length}, Remu count: ${remuDisbs.length}`);
+    console.log(`[Excel Export] Salary names:`, salaryDisbs.map(d => d.employee_name));
+    console.log(`[Excel Export] Remu names:`, remuDisbs.map(d => d.employee_name));
 
     const copyCell = (srcCell, destCell) => {
         destCell.style = srcCell.style;
@@ -146,7 +143,7 @@ async function generateExcelStatement(periodId, sortBy = 'id') {
         const busFee = parseFloat(dec.BusFee || 0);
 
         row.getCell(2).value = idx + 1; // Sl No in B
-        row.getCell(3).value = d.employee_name; // Name in C
+        row.getCell(3).value = d.full_display_name; // Name in C
         let joinDateStr = '';
         if (d.joining_date) {
             const parts = d.joining_date.split('-');
