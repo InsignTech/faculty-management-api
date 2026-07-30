@@ -42,7 +42,16 @@ const checkMenuBooking = async (req, res, next) => {
         const authHeader = req.headers.authorization;
         const expectedToken = 'test-token-12345';
         
-        if (!authHeader || (!authHeader.includes(expectedToken) && authHeader !== expectedToken)) {
+        let token = '';
+        if (authHeader) {
+            if (authHeader.startsWith('Bearer ')) {
+                token = authHeader.substring(7);
+            } else {
+                token = authHeader;
+            }
+        }
+
+        if (token !== expectedToken) {
             return res.status(401).json({
                 success: false,
                 message: 'Unauthorized: Invalid or missing test token (expected "test-token-12345")'
