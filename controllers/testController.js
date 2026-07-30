@@ -176,6 +176,27 @@ const checkMenuBooking = async (req, res, next) => {
     }
 };
 
+/**
+ * General testing endpoint to log any incoming request body to console
+ * POST /api/test/log-body
+ */
+const logBody = async (req, res, next) => {
+    try {
+        console.log('--- Received Body in Test Endpoint ---');
+        console.log(JSON.stringify(req.body, null, 2));
+        console.log('--------------------------------------');
+        
+        return res.status(200).json({
+            success: true,
+            message: 'Request body logged successfully',
+            loggedBody: req.body
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
 module.exports = {
-    checkMenuBooking
+    checkMenuBooking,
+    logBody
 };
