@@ -498,9 +498,13 @@ class LeaveModel {
                                  : secondHalf                 ? 'SecondHalf'
                                  : 'Absent';
 
-                const finalDeduct = (!firstHalf && !secondHalf) ? 1.00
+                let finalDeduct = (!firstHalf && !secondHalf) ? 1.00
                                   : (firstHalf && secondHalf)   ? 0.00
                                   : 0.50;
+
+                if (!isPaid) {
+                    finalDeduct = Math.max(Number(ad.deduction_days) || 0.00, finalDeduct);
+                }
 
                 const finalStatus = (finalShift === 'FullDay' || curShift === 'FullDay') ? 'Present' : 'Leave';
 
