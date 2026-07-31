@@ -156,17 +156,18 @@ proc: BEGIN
             SET @cur_shift = NULL; SET @cur_status = NULL;
             SET @reg_shift = NULL; SET @od_shift = NULL;
             SET @is_leave_existing = 0; SET @leave_shift_existing = NULL;
+            SET @cur_deduct = 0.00;
 
             SELECT 
                 first_in_time, last_out_time, worked_mins, 
                 shift_type, status,
                 regularization_shift_type, onduty_shift_type,
-                is_leave, leave_shift_type
+                is_leave, leave_shift_type, deduction_days
             INTO 
                 @first_in, @last_out, @worked_mins,
                 @cur_shift, @cur_status,
                 @reg_shift, @od_shift,
-                @is_leave_existing, @leave_shift_existing
+                @is_leave_existing, @leave_shift_existing, @cur_deduct
             FROM attendance_daily
             WHERE employee_id = v_emp_id AND date = v_current_date
             LIMIT 1;
@@ -190,6 +191,10 @@ proc: BEGIN
 
             SET @final_deduct = IF(@v_first_half_covered AND @v_second_half_covered, 0.00, 0.50);
             IF NOT @v_first_half_covered AND NOT @v_second_half_covered THEN SET @final_deduct = 1.00; END IF;
+
+            IF COALESCE(v_is_paid, 1) = 0 THEN
+                SET @final_deduct = GREATEST(COALESCE(@cur_deduct, 0.00), @final_deduct);
+            END IF;
 
             SET @final_shift = 'Absent';
             IF @v_first_half_covered AND @v_second_half_covered THEN SET @final_shift = 'FullDay';

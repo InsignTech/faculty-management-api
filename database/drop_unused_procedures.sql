@@ -1,0 +1,40 @@
+-- SQL Script to drop unused Stored Procedures
+-- Generated on 2026-07-30T09:58:33.479Z
+
+DROP PROCEDURE IF EXISTS `sp_apply_regularization`;
+DROP PROCEDURE IF EXISTS `sp_action_leave_request`;
+DROP PROCEDURE IF EXISTS `sp_apply_leave_approval`;
+DROP PROCEDURE IF EXISTS `sp_approve_leave_1`;
+DROP PROCEDURE IF EXISTS `sp_approve_regularization`;
+DROP PROCEDURE IF EXISTS `sp_cancel_leave`;
+DROP PROCEDURE IF EXISTS `sp_create_leave_policy`;
+DROP PROCEDURE IF EXISTS `sp_delete_holiday`;
+DROP PROCEDURE IF EXISTS `sp_delete_leave_policy`;
+DROP PROCEDURE IF EXISTS `sp_get_attendance_settings`;
+DROP PROCEDURE IF EXISTS `sp_get_designation_policy`;
+DROP PROCEDURE IF EXISTS `sp_get_employees`;
+DROP PROCEDURE IF EXISTS `sp_get_employees_filtered`;
+DROP PROCEDURE IF EXISTS `sp_get_employee_adjustments`;
+DROP PROCEDURE IF EXISTS `sp_get_employee_leave_requests`;
+DROP PROCEDURE IF EXISTS `sp_get_employee_policy`;
+DROP PROCEDURE IF EXISTS `sp_get_holidays`;
+DROP PROCEDURE IF EXISTS `sp_get_leave_balance`;
+DROP PROCEDURE IF EXISTS `sp_get_leave_policies`;
+DROP PROCEDURE IF EXISTS `sp_get_leave_types_by_policy`;
+DROP PROCEDURE IF EXISTS `sp_get_role_policy`;
+DROP PROCEDURE IF EXISTS `sp_get_subordinate_leave_requests`;
+DROP PROCEDURE IF EXISTS `sp_handle_adjustment_approval`;
+DROP PROCEDURE IF EXISTS `sp_handle_regularization_approval`;
+DROP PROCEDURE IF EXISTS `sp_process_attendance_logs`;
+DROP PROCEDURE IF EXISTS `sp_process_attendance_old`;
+DROP PROCEDURE IF EXISTS `sp_process_attendance_range`;
+DROP PROCEDURE IF EXISTS `sp_process_attendance_v1`;
+DROP PROCEDURE IF EXISTS `sp_request_attendance_adjustment`;
+DROP PROCEDURE IF EXISTS `sp_save_designation_policy`;
+DROP PROCEDURE IF EXISTS `sp_save_employee_policy`;
+DROP PROCEDURE IF EXISTS `sp_save_holiday`;
+DROP PROCEDURE IF EXISTS `sp_save_role_policy`;
+DROP PROCEDURE IF EXISTS `sp_save_role_privilage`;
+DROP PROCEDURE IF EXISTS `sp_set_active_leave_policy`;
+DROP PROCEDURE IF EXISTS `sp_update_attendance_setting`;
+DROP PROCEDURE IF EXISTS `sp_update_leave_policy`;
