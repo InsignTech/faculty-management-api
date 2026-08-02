@@ -11,12 +11,23 @@ const whatsappAuth = async (req, res, next) => {
         });
     }
 
-    const { Phone } = req.body;
+    const { Phone, message } = req.body;
     if (!Phone) {
         return res.status(400).json({
             success: false,
             message: 'Phone number is required in request body.',
             errorCode: 'PHONE_REQUIRED'
+        });
+    }
+
+    // Validate that the message is a greeting
+    const greetings = ['hi', 'hello', 'hlo', 'hey', 'start'];
+    const cleanMessage = (message || '').trim().toLowerCase();
+    if (!greetings.includes(cleanMessage)) {
+        return res.status(200).json({
+            success: true,
+            userExist: false,
+            emp_name: ""
         });
     }
 
