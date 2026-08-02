@@ -2,6 +2,14 @@ const { sendResponse } = require('../utils/responseHelper');
 
 const handleMessage = async (req, res, next) => {
     try {
+        if (!req.userExist) {
+            return res.status(200).json({
+                success: true,
+                userExist: false,
+                message: 'Employee not found with the provided phone number.'
+            });
+        }
+
         const employee = req.employee;
         const employeeName = employee.employee_name;
 
@@ -12,10 +20,15 @@ Please select:
 1. View Attendance
 2. View Leave`;
 
-        return sendResponse(res, 200, welcomeMessage, {
-            employee_id: employee.employee_id,
-            employee_code: employee.employee_code,
-            employee_name: employee.employee_name
+        return res.status(200).json({
+            success: true,
+            userExist: true,
+            message: welcomeMessage,
+            data: {
+                employee_id: employee.employee_id,
+                employee_code: employee.employee_code,
+                employee_name: employee.employee_name
+            }
         });
     } catch (error) {
         next(error);

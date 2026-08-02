@@ -23,15 +23,12 @@ const whatsappAuth = async (req, res, next) => {
     try {
         const employee = await EmployeeModel.findByPhone(Phone);
         if (!employee) {
-            return res.status(404).json({
-                success: false,
-                message: 'Employee not found with the provided phone number.',
-                errorCode: 'EMPLOYEE_NOT_FOUND'
-            });
+            req.userExist = false;
+            req.employee = null;
+        } else {
+            req.userExist = true;
+            req.employee = employee;
         }
-
-        // Attach employee to request object for downstream usage
-        req.employee = employee;
         next();
     } catch (error) {
         next(error);
