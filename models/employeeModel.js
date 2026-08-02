@@ -585,6 +585,36 @@ class EmployeeModel {
 
     return { employees: rows, total };
   }
+
+  static async findByPhone(phone) {
+    if (!phone) return null;
+    const cleanPhone = phone.replace(/\D/g, '');
+    const countryCode = (process.env.country_code || process.env.COUNTRY_CODE || '91').replace(/\D/g, '');
+    
+    let basePhone = cleanPhone;
+    if (countryCode && cleanPhone.startsWith(countryCode)) {
+      basePhone = cleanPhone.slice(countryCode.length);
+    }
+    
+    const candidates = [
+      cleanPhone,
+      basePhone,
+      `+${cleanPhone}`,
+      `+${basePhone}`,
+      `0${basePhone}`
+    ].filter(Boolean);
+
+    if (candidates.length === 0) return null;
+
+    const [rows] = await pool.query(
+      `SELECT * FROM employee 
+       WHERE active = 1 
+       AND contact_number IN (?) 
+       LIMIT 1`,
+      [candidates]
+    );
+    return rows.length > 0 ? rows[0] : null;
+  }
 }
 
 module.exports = EmployeeModel;
