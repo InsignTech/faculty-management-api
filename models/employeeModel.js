@@ -604,6 +604,8 @@ class EmployeeModel {
       `0${basePhone}`
     ].filter(Boolean);
 
+    console.log(`[WhatsApp API Debug] Querying database with candidate list:`, candidates);
+
     if (candidates.length === 0) return null;
 
     const [rows] = await pool.query(
