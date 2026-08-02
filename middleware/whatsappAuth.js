@@ -20,6 +20,10 @@ const whatsappAuth = async (req, res, next) => {
         });
     }
 
+    const startTime = Date.now();
+    req.startTime = startTime;
+    console.log(`[WhatsApp API] Request received at: ${new Date(startTime).toISOString()} for Phone: ${req.body.Phone || 'unknown'}`);
+
     try {
         const employee = await EmployeeModel.findByPhone(Phone);
         if (!employee) {
