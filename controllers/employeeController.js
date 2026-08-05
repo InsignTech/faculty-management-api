@@ -4,6 +4,7 @@ const UserModel = require('../models/userModel');
 const { sendResponse } = require('../utils/responseHelper');
 const ErrorResponse = require('../utils/errorResponse');
 const { sendWelcomeEmail } = require('../utils/emailService');
+const { interceptApproval } = require('../utils/approvalInterceptor');
 
 const handleDuplicateEmailError = (error, next) => {
   // MySQL duplicate key error code is 1062 or 'ER_DUP_ENTRY'
@@ -30,22 +31,36 @@ const createEmployee = async (req, res, next) => {
       return next(new ErrorResponse('Please provide a valid email address!', 400, 'VALIDATION_ERROR'));
     }
 
-    // The account creation is now handled inside EmployeeModel.create
-    const result = await EmployeeModel.create(req.body);
-
-    // Send welcome email if creation was successful
-    if (result && result.employee_id && email) {
-      try {
-        // Default password pattern used in Model: [EmployeeCode]@123
-        const tempPassword = `${employee_code || 'User'}@123`;
-        await sendWelcomeEmail({ toEmail: email, employeeName: employee_name, tempPassword });
-        console.log(`Welcome email sent to: ${email}`);
-      } catch (emailErr) {
-        console.error(`Failed to send welcome email to ${email}:`, emailErr.message);
+    const requesterId = req.user.employeeId || req.user.employee_id;
+    const execute = async () => {
+      const result = await EmployeeModel.create(req.body);
+      if (result && result.employee_id && email) {
+        try {
+          const tempPassword = `${employee_code || 'User'}@123`;
+          await sendWelcomeEmail({ toEmail: email, employeeName: employee_name, tempPassword });
+          console.log(`Welcome email sent to: ${email}`);
+        } catch (emailErr) {
+          console.error(`Failed to send welcome email to ${email}:`, emailErr.message);
+        }
       }
+      return result;
+    };
+
+    const interceptResult = await interceptApproval({
+      requestType: 'EMPLOYEE',
+      actionType: 'CREATE',
+      entityId: null,
+      requestedData: req.body,
+      originalData: null,
+      requesterId,
+      executeCallback: execute
+    });
+
+    if (interceptResult.pendingApproval) {
+      return sendResponse(res, 202, interceptResult.message, { pendingApproval: true });
     }
 
-    sendResponse(res, 201, 'Employee created successfully', result);
+    sendResponse(res, 201, 'Employee created successfully', interceptResult.result);
   } catch (error) {
     handleDuplicateEmailError(error, next);
   }
@@ -57,7 +72,7 @@ const getEmployees = async (req, res, next) => {
     const offset = (page - 1) * limit;
 
     const userRole = req.user.role?.toLowerCase();
-    const isAdmin = ['admin', 'super_admin', 'principal'].includes(userRole);
+    const isAdmin = ['admin', 'super_admin', 'principal', 'operations manager', 'operations_manager'].includes(userRole);
 
     let managerId = 0;
     let myManagerId = 0;
@@ -133,19 +148,33 @@ const getMe = async (req, res, next) => {
 
 const updateEmployee = async (req, res, next) => {
   try {
-    const { email } = req.body;
-    if (email) {
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      if (!emailRegex.test(email)) {
-        return next(new ErrorResponse('Please provide a valid email address!', 400, 'VALIDATION_ERROR'));
-      }
+    const requesterId = req.user.employeeId || req.user.employee_id;
+    const employeeId = req.params.id;
+    const originalEmployee = await EmployeeModel.getById(employeeId);
+
+    const execute = async () => {
+      const result = await EmployeeModel.update(employeeId, req.body);
+      return result;
+    };
+
+    const interceptResult = await interceptApproval({
+      requestType: 'EMPLOYEE',
+      actionType: 'UPDATE',
+      entityId: employeeId,
+      requestedData: req.body,
+      originalData: originalEmployee,
+      requesterId,
+      executeCallback: execute
+    });
+
+    if (interceptResult.pendingApproval) {
+      return sendResponse(res, 202, interceptResult.message, { pendingApproval: true });
     }
 
-    const result = await EmployeeModel.update(req.params.id, req.body);
-    if (result && result.affected_rows === 0) {
+    if (interceptResult.result && interceptResult.result.affected_rows === 0) {
       return next(new ErrorResponse('Employee not found', 404, 'NOT_FOUND'));
     }
-    sendResponse(res, 200, 'Employee updated successfully', result);
+    sendResponse(res, 200, 'Employee updated successfully', interceptResult.result);
   } catch (error) {
     handleDuplicateEmailError(error, next);
   }

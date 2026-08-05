@@ -2,6 +2,7 @@ const ShiftModel = require('../models/shiftModel');
 const pool = require('../config/db');
 const { sendResponse } = require('../utils/responseHelper');
 const ErrorResponse = require('../utils/errorResponse');
+const { interceptApproval } = require('../utils/approvalInterceptor');
 
 const getGlobalShifts = async (req, res, next) => {
   try {
@@ -37,15 +38,35 @@ const updateGlobalShift = async (req, res, next) => {
       return next(new ErrorResponse('Start and End times are required', 400));
     }
 
-    const result = await ShiftModel.updateGlobalShift(id, {
-      start_time,
-      end_time,
-      start_grace_mins,
-      end_grace_mins,
-      modified_by: req.user.name || 'admin'
+    const requesterId = req.user.employeeId || req.user.employee_id;
+    const originalData = await ShiftModel.getGlobalShiftById(id);
+
+    const execute = async () => {
+      const result = await ShiftModel.updateGlobalShift(id, {
+        start_time,
+        end_time,
+        start_grace_mins,
+        end_grace_mins,
+        modified_by: req.user.name || 'admin'
+      });
+      return result;
+    };
+
+    const interceptResult = await interceptApproval({
+      requestType: 'SHIFT',
+      actionType: 'UPDATE',
+      entityId: id,
+      requestedData: req.body,
+      originalData,
+      requesterId,
+      executeCallback: execute
     });
 
-    if (!result) {
+    if (interceptResult.pendingApproval) {
+      return sendResponse(res, 202, interceptResult.message, { pendingApproval: true });
+    }
+
+    if (!interceptResult.result) {
       return next(new ErrorResponse('Global shift not found', 404));
     }
 
@@ -68,46 +89,73 @@ const assignEmployeeShift = async (req, res, next) => {
         return next(new ErrorResponse('To Date cannot be before From Date', 400));
     }
 
-    let targetEmployeeIds = [];
-    if (employee_id) {
-      targetEmployeeIds.push(employee_id);
-    } else if (role_id) {
-      const roleIds = Array.isArray(role_id) ? role_id : [role_id];
-      const activeRoleIds = roleIds.filter(id => id && id !== 'all');
-      
-      if (activeRoleIds.length > 0) {
-        const [rows] = await pool.query('SELECT employee_id FROM employee WHERE role_id IN (?) AND active = 1', [activeRoleIds]);
-        targetEmployeeIds = rows.map(r => r.employee_id);
-      }
-    }
+    const requesterId = req.user.employeeId || req.user.employee_id;
 
-    if (targetEmployeeIds.length === 0) {
-      return next(new ErrorResponse('No active employees found for the selected roles', 400));
-    }
-
-    const results = [];
-    let overlapCount = 0;
-    for (const emp_id of targetEmployeeIds) {
-      try {
-        await ShiftModel.assignEmployeeShifts(
-          emp_id,
-          from_date,
-          to_date,
-          shifts,
-          req.user.name || 'admin'
-        );
-        results.push({ employee_id: emp_id, success: true });
-      } catch (error) {
-        if (error.message.includes('overlaps')) {
-          overlapCount++;
-          results.push({ employee_id: emp_id, success: false, reason: 'Overlap error' });
-        } else {
-          throw error;
+    const execute = async () => {
+      let targetEmployeeIds = [];
+      if (employee_id) {
+        targetEmployeeIds.push(employee_id);
+      } else if (role_id) {
+        const roleIds = Array.isArray(role_id) ? role_id : [role_id];
+        const activeRoleIds = roleIds.filter(id => id && id !== 'all');
+        
+        if (activeRoleIds.length > 0) {
+          const [rows] = await pool.query('SELECT employee_id FROM employee WHERE role_id IN (?) AND active = 1', [activeRoleIds]);
+          targetEmployeeIds = rows.map(r => r.employee_id);
         }
       }
+
+      if (targetEmployeeIds.length === 0) {
+        throw new ErrorResponse('No active employees found for the selected roles', 400);
+      }
+
+      const results = [];
+      let overlapCount = 0;
+      for (const emp_id of targetEmployeeIds) {
+        try {
+          await ShiftModel.assignEmployeeShifts(
+            emp_id,
+            from_date,
+            to_date,
+            shifts,
+            req.user.name || 'admin'
+          );
+          results.push({ employee_id: emp_id, success: true });
+        } catch (error) {
+          if (error.message.includes('overlaps')) {
+            overlapCount++;
+            results.push({ employee_id: emp_id, success: false, reason: 'Overlap error' });
+          } else {
+            throw error;
+          }
+        }
+      }
+      return { results, targetEmployeeIdsCount: targetEmployeeIds.length, overlapCount };
+    };
+
+    const interceptResult = await interceptApproval({
+      requestType: 'SHIFT',
+      actionType: 'ASSIGN',
+      entityId: employee_id || null,
+      requestedData: {
+        employee_id,
+        role_id,
+        from_date,
+        to_date,
+        shifts,
+        modified_by: req.user.name || 'admin'
+      },
+      originalData: null,
+      requesterId,
+      executeCallback: execute
+    });
+
+    if (interceptResult.pendingApproval) {
+      return sendResponse(res, 202, interceptResult.message, { pendingApproval: true });
     }
 
-    sendResponse(res, 201, `Shift assigned to ${targetEmployeeIds.length - overlapCount} employees. (${overlapCount} skipped due to overlap).`, { results });
+    const { results, targetEmployeeIdsCount, overlapCount } = interceptResult.result;
+    sendResponse(res, 201, `Shift assigned to ${targetEmployeeIdsCount - overlapCount} employees. (${overlapCount} skipped due to overlap).`, { results });
   } catch (error) {
     next(error);
   }

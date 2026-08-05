@@ -1,0 +1,22 @@
+CREATE TABLE IF NOT EXISTS `generic_approvals` (
+  `id` INT NOT NULL AUTO_INCREMENT,
+  `request_type` VARCHAR(50) NOT NULL,
+  `entity_id` INT DEFAULT NULL,
+  `action_type` VARCHAR(20) NOT NULL,
+  `original_data` LONGTEXT DEFAULT NULL,
+  `requested_data` LONGTEXT DEFAULT NULL,
+  `requester_id` INT NOT NULL,
+  `requested_on` DATETIME DEFAULT CURRENT_TIMESTAMP,
+  `approver_1_id` INT NOT NULL,
+  `approver_2_id` INT DEFAULT NULL,
+  `current_level` INT DEFAULT 1,
+  `status` ENUM('Pending','Approved','Rejected','Cancelled') DEFAULT 'Pending',
+  `remarks` TEXT DEFAULT NULL,
+  `actioned_by_id` INT DEFAULT NULL,
+  `actioned_on` DATETIME DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  CONSTRAINT `fk_ga_requester` FOREIGN KEY (`requester_id`) REFERENCES `employee` (`employee_id`),
+  CONSTRAINT `fk_ga_approver1` FOREIGN KEY (`approver_1_id`) REFERENCES `employee` (`employee_id`),
+  CONSTRAINT `fk_ga_approver2` FOREIGN KEY (`approver_2_id`) REFERENCES `employee` (`employee_id`),
+  CONSTRAINT `fk_ga_actioned` FOREIGN KEY (`actioned_by_id`) REFERENCES `employee` (`employee_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;

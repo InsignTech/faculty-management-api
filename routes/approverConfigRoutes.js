@@ -16,8 +16,8 @@ router.get('/:employeeId', getConfig);
 // Get approver config for a specific request type
 router.get('/:employeeId/:requestType', getConfigByType);
 
-// Save/update approver config (Admin/Principal only)
-router.post('/', authorize('Admin', 'Principal', 'HOD', 'super_admin'), saveConfig);
+// Save/update approver config (Admin/Principal/Operations Manager)
+router.post('/', authorize('Admin', 'Principal', 'HOD', 'super_admin', 'Operations Manager', 'operations manager'), saveConfig);
 
 // Check substitute availability (any authenticated user)
 router.get('/check-substitute', checkSubstitute);
