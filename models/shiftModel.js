@@ -1,6 +1,11 @@
 const pool = require('../config/db');
 
 class ShiftModel {
+  static async getGlobalShiftById(shiftId) {
+    const [rows] = await pool.query('SELECT * FROM shift_master WHERE shift_id = ? AND employee_id = -1', [shiftId]);
+    return rows[0] || null;
+  }
+
   // Get all global shifts (employee_id = -1)
   static async getGlobalShifts() {
     const [rows] = await pool.query(

@@ -1,6 +1,7 @@
 const HolidayModel = require('../models/holidayModel');
 const { sendResponse } = require('../utils/responseHelper');
 const ErrorResponse = require('../utils/errorResponse');
+const { interceptApproval } = require('../utils/approvalInterceptor');
 
 const getGeneralHolidays = async (req, res, next) => {
   try {
@@ -40,47 +41,72 @@ const saveHoliday = async (req, res, next) => {
       return next(new ErrorResponse('Name, start date, and type are required', 400));
     }
 
-    // Handle batch assignment for multiple employees
-    if (!holiday_id && Array.isArray(employee_ids) && employee_ids.length > 0) {
-      const results = [];
-      for (const emp_id of employee_ids) {
-        try {
-          const result = await HolidayModel.saveHoliday({
-            holiday_id,
-            employee_id: emp_id,
-            holiday_name,
-            holiday_start_date,
-            holiday_end_date: holiday_end_date || holiday_start_date,
-            holiday_type,
-            description,
-            is_active: is_active !== undefined ? is_active : 1
-          });
-          results.push({ employee_id: emp_id, success: true, result });
-        } catch (error) {
-          // Gracefully handle duplicate keys (MySQL error ER_DUP_ENTRY / 1062)
-          if (error.code === 'ER_DUP_ENTRY' || error.errno === 1062) {
-            results.push({ employee_id: emp_id, success: false, reason: 'Duplicate entry ignored' });
-          } else {
-            throw error; // Rethrow other database errors
-          }
-        }
-      }
-      return sendResponse(res, 200, 'Holidays assigned to selected employees', results);
+    const requesterId = req.user.employeeId || req.user.employee_id;
+    const actionType = holiday_id ? 'UPDATE' : 'CREATE';
+
+    let originalData = null;
+    if (holiday_id) {
+      originalData = await HolidayModel.getById(holiday_id);
     }
 
-    const result = await HolidayModel.saveHoliday({
-      holiday_id,
-      employee_id: employee_id !== undefined ? employee_id : -1,
-      holiday_name,
-      holiday_start_date,
-      holiday_end_date: holiday_end_date || holiday_start_date,
-      holiday_type,
-      description,
-      is_active: is_active !== undefined ? is_active : 1
+    const execute = async () => {
+      // Handle batch assignment for multiple employees
+      if (!holiday_id && Array.isArray(employee_ids) && employee_ids.length > 0) {
+        const results = [];
+        for (const emp_id of employee_ids) {
+          try {
+            const result = await HolidayModel.saveHoliday({
+              holiday_id,
+              employee_id: emp_id,
+              holiday_name,
+              holiday_start_date,
+              holiday_end_date: holiday_end_date || holiday_start_date,
+              holiday_type,
+              description,
+              is_active: is_active !== undefined ? is_active : 1
+            });
+            results.push({ employee_id: emp_id, success: true, result });
+          } catch (error) {
+            // Gracefully handle duplicate keys (MySQL error ER_DUP_ENTRY / 1062)
+            if (error.code === 'ER_DUP_ENTRY' || error.errno === 1062) {
+              results.push({ employee_id: emp_id, success: false, reason: 'Duplicate entry ignored' });
+            } else {
+              throw error; // Rethrow other database errors
+            }
+          }
+        }
+        return results;
+      }
+
+      const result = await HolidayModel.saveHoliday({
+        holiday_id,
+        employee_id: employee_id !== undefined ? employee_id : -1,
+        holiday_name,
+        holiday_start_date,
+        holiday_end_date: holiday_end_date || holiday_start_date,
+        holiday_type,
+        description,
+        is_active: is_active !== undefined ? is_active : 1
+      });
+      return result;
+    };
+
+    const interceptResult = await interceptApproval({
+      requestType: 'HOLIDAY',
+      actionType,
+      entityId: holiday_id || null,
+      requestedData: req.body,
+      originalData,
+      requesterId,
+      executeCallback: execute
     });
 
+    if (interceptResult.pendingApproval) {
+      return sendResponse(res, 202, interceptResult.message, { pendingApproval: true });
+    }
+
     const message = holiday_id ? 'Holiday updated successfully' : 'Holiday created successfully';
-    sendResponse(res, 200, message, result);
+    sendResponse(res, 200, message, interceptResult.result);
   } catch (error) {
     next(error);
   }
@@ -89,8 +115,29 @@ const saveHoliday = async (req, res, next) => {
 const deleteHoliday = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const success = await HolidayModel.deleteHoliday(id);
-    if (!success) {
+    const requesterId = req.user.employeeId || req.user.employee_id;
+    const originalData = await HolidayModel.getById(id);
+
+    const execute = async () => {
+      const success = await HolidayModel.deleteHoliday(id);
+      return success;
+    };
+
+    const interceptResult = await interceptApproval({
+      requestType: 'HOLIDAY',
+      actionType: 'DELETE',
+      entityId: id,
+      requestedData: null,
+      originalData,
+      requesterId,
+      executeCallback: execute
+    });
+
+    if (interceptResult.pendingApproval) {
+      return sendResponse(res, 202, interceptResult.message, { pendingApproval: true });
+    }
+
+    if (!interceptResult.result) {
       return next(new ErrorResponse('Holiday not found', 404));
     }
     sendResponse(res, 200, 'Holiday deleted successfully');

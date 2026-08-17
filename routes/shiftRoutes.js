@@ -12,7 +12,7 @@ const { protect, authorize } = require('../middleware/auth');
 
 // All shift routes require authentication and specific roles
 router.use(protect);
-router.use(authorize('Admin', 'Principal', 'Super Admin', 'superadmin', 'super_admin', 'principal'));
+router.use(authorize('Admin', 'Principal', 'Super Admin', 'superadmin', 'super_admin', 'principal', 'Operations Manager', 'operations manager'));
 
 router.get('/global', getGlobalShifts);
 router.get('/employees', getAllEmployeeShifts);

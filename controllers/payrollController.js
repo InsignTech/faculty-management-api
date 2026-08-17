@@ -2,6 +2,7 @@ const PayrollModel = require('../models/payrollModel');
 const { sendResponse } = require('../utils/responseHelper');
 const ErrorResponse = require('../utils/errorResponse');
 const excelHelper = require('../utils/excelHelper');
+const { interceptApproval } = require('../utils/approvalInterceptor');
 
 // --- Periods ---
 const getPeriods = async (req, res, next) => {
@@ -155,8 +156,31 @@ const saveSalaryStructure = async (req, res, next) => {
             return next(new ErrorResponse('Please provide basic_pay and effective_from', 400));
         }
         const createdBy = req.user?.username || 'admin';
-        const insertId = await PayrollModel.saveSalaryStructure(req.params.empId, { ...req.body, created_by: createdBy });
-        sendResponse(res, 201, 'Salary structure updated successfully', { structure_id: insertId });
+        const empId = req.params.empId;
+        const requesterId = req.user.employeeId || req.user.employee_id;
+        
+        const originalData = await PayrollModel.getSalaryStructure(empId);
+
+        const execute = async () => {
+            const insertId = await PayrollModel.saveSalaryStructure(empId, { ...req.body, created_by: createdBy });
+            return { structure_id: insertId };
+        };
+
+        const interceptResult = await interceptApproval({
+            requestType: 'PAYROLL',
+            actionType: 'UPDATE',
+            entityId: empId,
+            requestedData: { subtype: 'SALARY_STRUCTURE', payload: { ...req.body, created_by: createdBy } },
+            originalData: { subtype: 'SALARY_STRUCTURE', payload: originalData },
+            requesterId,
+            executeCallback: execute
+        });
+
+        if (interceptResult.pendingApproval) {
+            return sendResponse(res, 202, interceptResult.message, { pendingApproval: true });
+        }
+
+        sendResponse(res, 201, 'Salary structure updated successfully', interceptResult.result);
     } catch (e) { next(e); }
 };
 
@@ -173,7 +197,30 @@ const saveDeductionConfig = async (req, res, next) => {
         if (!rule_id) {
             return next(new ErrorResponse('Please provide rule_id', 400));
         }
-        await PayrollModel.saveDeductionConfig(req.params.empId, req.body);
+        const empId = req.params.empId;
+        const requesterId = req.user.employeeId || req.user.employee_id;
+
+        const originalData = await PayrollModel.getDeductionConfigs(empId);
+
+        const execute = async () => {
+            await PayrollModel.saveDeductionConfig(empId, req.body);
+            return null;
+        };
+
+        const interceptResult = await interceptApproval({
+            requestType: 'PAYROLL',
+            actionType: 'UPDATE',
+            entityId: empId,
+            requestedData: { subtype: 'DEDUCTION_CONFIG', payload: req.body },
+            originalData: { subtype: 'DEDUCTION_CONFIG', payload: originalData },
+            requesterId,
+            executeCallback: execute
+        });
+
+        if (interceptResult.pendingApproval) {
+            return sendResponse(res, 202, interceptResult.message, { pendingApproval: true });
+        }
+
         sendResponse(res, 200, 'Deduction config saved successfully');
     } catch (e) { next(e); }
 };
@@ -187,7 +234,30 @@ const getTdsConfig = async (req, res, next) => {
 
 const saveTdsConfig = async (req, res, next) => {
     try {
-        await PayrollModel.saveTdsConfig(req.params.empId, req.body);
+        const empId = req.params.empId;
+        const requesterId = req.user.employeeId || req.user.employee_id;
+
+        const originalData = await PayrollModel.getTdsConfig(empId);
+
+        const execute = async () => {
+            await PayrollModel.saveTdsConfig(empId, req.body);
+            return null;
+        };
+
+        const interceptResult = await interceptApproval({
+            requestType: 'PAYROLL',
+            actionType: 'UPDATE',
+            entityId: empId,
+            requestedData: { subtype: 'TDS_CONFIG', payload: req.body },
+            originalData: { subtype: 'TDS_CONFIG', payload: originalData },
+            requesterId,
+            executeCallback: execute
+        });
+
+        if (interceptResult.pendingApproval) {
+            return sendResponse(res, 202, interceptResult.message, { pendingApproval: true });
+        }
+
         sendResponse(res, 200, 'TDS config saved successfully');
     } catch (e) { next(e); }
 };
@@ -205,7 +275,30 @@ const saveBankAccount = async (req, res, next) => {
         if (!bank_name || !branch_name || !account_number || !ifsc_code) {
             return next(new ErrorResponse('Please provide bank_name, branch_name, account_number, and ifsc_code', 400));
         }
-        await PayrollModel.saveBankAccount(req.params.empId, req.body);
+        const empId = req.params.empId;
+        const requesterId = req.user.employeeId || req.user.employee_id;
+
+        const originalData = await PayrollModel.getBankAccounts(empId);
+
+        const execute = async () => {
+            await PayrollModel.saveBankAccount(empId, req.body);
+            return null;
+        };
+
+        const interceptResult = await interceptApproval({
+            requestType: 'PAYROLL',
+            actionType: 'UPDATE',
+            entityId: empId,
+            requestedData: { subtype: 'BANK_ACCOUNT', payload: req.body },
+            originalData: { subtype: 'BANK_ACCOUNT', payload: originalData },
+            requesterId,
+            executeCallback: execute
+        });
+
+        if (interceptResult.pendingApproval) {
+            return sendResponse(res, 202, interceptResult.message, { pendingApproval: true });
+        }
+
         sendResponse(res, 200, 'Bank account saved successfully');
     } catch (e) { next(e); }
 };

@@ -24,6 +24,8 @@ const payrollRoutes = require('./routes/payrollRoutes');
 const admsRoutes = require('./routes/admsRoutes');
 const delegationRoutes = require('./routes/delegationRoutes');
 const testRoutes = require('./routes/testRoutes');
+const whatsappRoutes = require('./routes/whatsappRoutes');
+const genericApprovalRoutes = require('./routes/genericApprovalRoutes');
 const setupSwagger = require('./utils/swagger');
 const debugLog = require('./utils/debugLogger');
 
@@ -75,6 +77,8 @@ app.use('/api/approver-config', approverConfigRoutes);
 app.use('/api/payroll', payrollRoutes);
 app.use('/api/delegations', delegationRoutes);
 app.use('/api/test', testRoutes);
+app.use('/api/whatsapp', whatsappRoutes);
+app.use('/api/approvals', genericApprovalRoutes);
 app.use('/iclock', admsRoutes);
 
 

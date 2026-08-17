@@ -17,8 +17,8 @@ router.use(protect);
 router.get('/upcoming', getUpcomingHolidays);
 router.get('/personal', getPersonalHolidays);
 
-// Management routes restricted to Admin/Principal/super_admin
-router.use(authorize('Admin', 'Principal', 'super_admin', 'admin', 'Super Admin', 'principal'));
+// Management routes restricted to Admin/Principal/super_admin/Operations Manager
+router.use(authorize('Admin', 'Principal', 'super_admin', 'admin', 'Super Admin', 'principal', 'Operations Manager', 'operations manager'));
 
 router.get('/general', getGeneralHolidays);
 router.get('/employees', getEmployeeHolidays);

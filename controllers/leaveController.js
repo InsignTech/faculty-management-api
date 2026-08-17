@@ -1,4 +1,5 @@
 const LeaveModel = require('../models/leaveModel');
+const pool = require('../config/db');
 const { sendResponse } = require('../utils/responseHelper');
 const ErrorResponse = require('../utils/errorResponse');
 
@@ -33,6 +34,22 @@ const applyLeave = async (req, res, next) => {
 
         if (!leave_type || !start_date || !end_date || !total_days) {
             return next(new ErrorResponse('Please provide all required fields', 400));
+        }
+
+        // Check if dates are locked by a completed or submitted payroll period
+        const [payrollRows] = await pool.execute(
+            "SELECT MAX(end_date) AS max_locked_date FROM payroll_period WHERE status NOT IN ('draft')"
+        );
+        const maxLockedDateStr = payrollRows[0]?.max_locked_date;
+        if (maxLockedDateStr) {
+            const maxLockedDate = new Date(maxLockedDateStr).toISOString().split('T')[0];
+            const startCompare = new Date(start_date).toISOString().split('T')[0];
+            if (startCompare <= maxLockedDate) {
+                return next(new ErrorResponse(
+                    `Cannot apply for leave. The requested date (${startCompare}) falls on or before a locked payroll period ending on ${maxLockedDate}.`,
+                    400
+                ));
+            }
         }
 
         let targetEmployeeId = req.user.employeeId;

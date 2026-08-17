@@ -1,6 +1,11 @@
 const pool = require('../config/db');
 
 class HolidayModel {
+  static async getById(id) {
+    const [rows] = await pool.query('SELECT *, DATE_FORMAT(holiday_start_date, "%Y-%m-%d") as holiday_start_date, DATE_FORMAT(holiday_end_date, "%Y-%m-%d") as holiday_end_date FROM holiday_master WHERE holiday_id = ?', [id]);
+    return rows[0] || null;
+  }
+
   // Get all general holidays (employee_id = -1)
   static async getGeneralHolidays(year) {
     let query = 'SELECT *, DATE_FORMAT(holiday_start_date, "%Y-%m-%d") as holiday_start_date, DATE_FORMAT(holiday_end_date, "%Y-%m-%d") as holiday_end_date FROM holiday_master WHERE employee_id = -1';

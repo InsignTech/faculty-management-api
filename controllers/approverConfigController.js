@@ -1,6 +1,7 @@
 const ApproverConfigModel = require('../models/approverConfigModel');
 const { sendResponse } = require('../utils/responseHelper');
 const ErrorResponse = require('../utils/errorResponse');
+const { interceptApproval } = require('../utils/approvalInterceptor');
 
 /**
  * GET /api/approver-config/:employeeId
@@ -48,13 +49,36 @@ const saveConfig = async (req, res, next) => {
             return next(new ErrorResponse('request_type must be LEAVE, REGULARISATION, or ONDUTY', 400));
         }
 
-        const result = await ApproverConfigModel.saveConfig(
-            employee_id,
-            request_type.toUpperCase(),
-            approver_1_id,
-            approver_2_id || null
-        );
-        sendResponse(res, 200, 'Approver configuration saved', result);
+        const requesterId = req.user.employeeId || req.user.employee_id;
+        const execute = async () => {
+            return await ApproverConfigModel.saveConfig(
+                employee_id,
+                request_type.toUpperCase(),
+                approver_1_id,
+                approver_2_id || null
+            );
+        };
+
+        const interceptResult = await interceptApproval({
+            requestType: 'APPROVER_CONFIG',
+            actionType: 'UPDATE',
+            entityId: employee_id,
+            requestedData: {
+                employee_id: parseInt(employee_id),
+                request_type: request_type.toUpperCase(),
+                approver_1_id: parseInt(approver_1_id),
+                approver_2_id: approver_2_id ? parseInt(approver_2_id) : null
+            },
+            originalData: null,
+            requesterId,
+            executeCallback: execute
+        });
+
+        if (interceptResult.pendingApproval) {
+            return sendResponse(res, 202, interceptResult.message, { pendingApproval: true });
+        }
+
+        sendResponse(res, 200, 'Approver configuration saved', interceptResult.result);
     } catch (error) {
         next(error);
     }
