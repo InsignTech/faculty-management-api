@@ -31,6 +31,60 @@ async function interceptApproval({
         [requestType]
     );
 
+    if (requestType === 'SHIFT' && actionType === 'ASSIGN') {
+        let targetEmpIds = [];
+        if (requestedData.employee_id) {
+            targetEmpIds.push(parseInt(requestedData.employee_id));
+        } else if (requestedData.role_id) {
+            const roleIds = Array.isArray(requestedData.role_id) ? requestedData.role_id : [requestedData.role_id];
+            const activeRoleIds = roleIds.filter(id => id && id !== 'all');
+            if (activeRoleIds.length > 0) {
+                const [rows] = await pool.query('SELECT employee_id FROM employee WHERE role_id IN (?) AND active = 1', [activeRoleIds]);
+                targetEmpIds = rows.map(r => parseInt(r.employee_id));
+            }
+        }
+
+        const newStart = new Date(requestedData.from_date);
+        const newEnd = requestedData.to_date ? new Date(requestedData.to_date) : new Date('9999-12-31');
+
+        const shiftPending = pendingRequests.filter(r => r.action_type === 'ASSIGN');
+        for (const r of shiftPending) {
+            try {
+                const existingData = JSON.parse(r.requested_data);
+                if (!existingData) continue;
+
+                let existingEmpIds = [];
+                if (existingData.employee_id) {
+                    existingEmpIds.push(parseInt(existingData.employee_id));
+                } else if (existingData.role_id) {
+                    const roleIds = Array.isArray(existingData.role_id) ? existingData.role_id : [existingData.role_id];
+                    const activeRoleIds = roleIds.filter(id => id && id !== 'all');
+                    if (activeRoleIds.length > 0) {
+                        const [rows] = await pool.query('SELECT employee_id FROM employee WHERE role_id IN (?) AND active = 1', [activeRoleIds]);
+                        existingEmpIds = rows.map(r => parseInt(r.employee_id));
+                    }
+                }
+
+                const intersection = targetEmpIds.filter(id => existingEmpIds.includes(id));
+                if (intersection.length > 0) {
+                    const existStart = new Date(existingData.from_date);
+                    const existEnd = existingData.to_date ? new Date(existingData.to_date) : new Date('9999-12-31');
+
+                    const overlap = newStart <= existEnd && existStart <= newEnd;
+                    if (overlap) {
+                        throw new ErrorResponse(
+                            `Cannot assign shift. There is already a pending shift assignment request (REQ-${r.id}) that overlaps with this date range for one or more of the selected employees.`,
+                            409,
+                            'PENDING_APPROVAL_CONFLICT'
+                        );
+                    }
+                }
+            } catch (e) {
+                if (e.errorCode === 'PENDING_APPROVAL_CONFLICT') throw e;
+            }
+        }
+    }
+
     if (requestType === 'EMPLOYEE' && actionType === 'CREATE') {
         const duplicate = pendingRequests.find(r => {
             if (r.action_type !== 'CREATE') return false;
