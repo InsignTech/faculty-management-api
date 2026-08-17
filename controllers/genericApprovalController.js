@@ -5,6 +5,7 @@ const HolidayModel = require('../models/holidayModel');
 const ShiftModel = require('../models/shiftModel');
 const OperationApproverConfigModel = require('../models/operationApproverConfigModel');
 const ApproverConfigModel = require('../models/approverConfigModel');
+const LeavePolicyModel = require('../models/leavePolicyModel');
 const { sendResponse } = require('../utils/responseHelper');
 const ErrorResponse = require('../utils/errorResponse');
 
@@ -134,6 +135,20 @@ const actionApproval = async (req, res, next) => {
                     date: requestedData.date,
                     role_id: requestedData.role_id
                 });
+            }
+        } else if (requestType === 'LEAVE_POLICY') {
+            if (actionType === 'CREATE_SYSTEM') {
+                await LeavePolicyModel.createSystemPolicy(requestedData);
+            } else if (actionType === 'UPDATE_SYSTEM') {
+                await LeavePolicyModel.updateSystemPolicy(entityId, requestedData);
+            } else if (actionType === 'ACTIVATE_SYSTEM') {
+                await LeavePolicyModel.setActiveSystemPolicy(entityId);
+            } else if (actionType === 'DELETE_SYSTEM') {
+                await LeavePolicyModel.deleteSystemPolicy(entityId);
+            } else if (actionType === 'SAVE_ROLE') {
+                await LeavePolicyModel.saveRolePolicy(requestedData);
+            } else if (actionType === 'SAVE_EMPLOYEE') {
+                await LeavePolicyModel.saveEmployeePolicy(requestedData);
             }
         } else if (requestType === 'APPROVER_CONFIG') {
             if (actionType === 'UPDATE') {

@@ -1,6 +1,8 @@
 const LeavePolicyModel = require('../models/leavePolicyModel');
+const pool = require('../config/db');
 const { sendResponse } = require('../utils/responseHelper');
 const ErrorResponse = require('../utils/errorResponse');
+const { interceptApproval } = require('../utils/approvalInterceptor');
 
 const LEAVE_TYPES = [
   'Sick Leave',
@@ -67,14 +69,40 @@ const createSystemPolicy = async (req, res, next) => {
     }
 
     const created_by = req.user ? req.user.username : 'admin';
-    const result = await LeavePolicyModel.createSystemPolicy({
-      policy_name,
-      start_date,
-      end_date,
-      policy_value: policy_value || [],
-      created_by
+    const requesterId = req.user ? (req.user.employeeId || req.user.employee_id) : null;
+
+    const execute = async () => {
+      const result = await LeavePolicyModel.createSystemPolicy({
+        policy_name,
+        start_date,
+        end_date,
+        policy_value: policy_value || [],
+        created_by
+      });
+      return result;
+    };
+
+    const interceptResult = await interceptApproval({
+      requestType: 'LEAVE_POLICY',
+      actionType: 'CREATE_SYSTEM',
+      entityId: null,
+      requestedData: {
+        policy_name,
+        start_date,
+        end_date,
+        policy_value: policy_value || [],
+        created_by
+      },
+      originalData: null,
+      requesterId,
+      executeCallback: execute
     });
-    sendResponse(res, 201, 'System policy created successfully', result);
+
+    if (interceptResult.pendingApproval) {
+      return sendResponse(res, 202, interceptResult.message, { pendingApproval: true });
+    }
+
+    sendResponse(res, 201, 'System policy created successfully', interceptResult.result);
   } catch (error) {
     next(error);
   }
@@ -87,13 +115,40 @@ const updateSystemPolicy = async (req, res, next) => {
       return next(new ErrorResponse('Invalid leave types provided', 400));
     }
 
-    const result = await LeavePolicyModel.updateSystemPolicy(req.params.id, {
-      policy_name,
-      start_date,
-      end_date,
-      policy_value
+    const requesterId = req.user ? (req.user.employeeId || req.user.employee_id) : null;
+    const [rows] = await pool.execute('SELECT * FROM leave_policy WHERE leave_policy_id = ?', [req.params.id]);
+    const originalPolicy = rows[0] || null;
+
+    const execute = async () => {
+      const result = await LeavePolicyModel.updateSystemPolicy(req.params.id, {
+        policy_name,
+        start_date,
+        end_date,
+        policy_value
+      });
+      return result;
+    };
+
+    const interceptResult = await interceptApproval({
+      requestType: 'LEAVE_POLICY',
+      actionType: 'UPDATE_SYSTEM',
+      entityId: req.params.id,
+      requestedData: {
+        policy_name,
+        start_date,
+        end_date,
+        policy_value
+      },
+      originalData: originalPolicy,
+      requesterId,
+      executeCallback: execute
     });
-    sendResponse(res, 200, 'System policy updated successfully', result);
+
+    if (interceptResult.pendingApproval) {
+      return sendResponse(res, 202, interceptResult.message, { pendingApproval: true });
+    }
+
+    sendResponse(res, 200, 'System policy updated successfully', interceptResult.result);
   } catch (error) {
     next(error);
   }
@@ -101,7 +156,27 @@ const updateSystemPolicy = async (req, res, next) => {
 
 const setActiveSystemPolicy = async (req, res, next) => {
   try {
-    await LeavePolicyModel.setActiveSystemPolicy(req.params.id);
+    const requesterId = req.user ? (req.user.employeeId || req.user.employee_id) : null;
+
+    const execute = async () => {
+      await LeavePolicyModel.setActiveSystemPolicy(req.params.id);
+      return { success: true };
+    };
+
+    const interceptResult = await interceptApproval({
+      requestType: 'LEAVE_POLICY',
+      actionType: 'ACTIVATE_SYSTEM',
+      entityId: req.params.id,
+      requestedData: null,
+      originalData: null,
+      requesterId,
+      executeCallback: execute
+    });
+
+    if (interceptResult.pendingApproval) {
+      return sendResponse(res, 202, interceptResult.message, { pendingApproval: true });
+    }
+
     sendResponse(res, 200, 'Policy set as active throughout the system');
   } catch (error) {
     next(error);
@@ -110,7 +185,29 @@ const setActiveSystemPolicy = async (req, res, next) => {
 
 const deleteSystemPolicy = async (req, res, next) => {
   try {
-    await LeavePolicyModel.deleteSystemPolicy(req.params.id);
+    const requesterId = req.user ? (req.user.employeeId || req.user.employee_id) : null;
+    const [rows] = await pool.execute('SELECT * FROM leave_policy WHERE leave_policy_id = ?', [req.params.id]);
+    const originalPolicy = rows[0] || null;
+
+    const execute = async () => {
+      await LeavePolicyModel.deleteSystemPolicy(req.params.id);
+      return { success: true };
+    };
+
+    const interceptResult = await interceptApproval({
+      requestType: 'LEAVE_POLICY',
+      actionType: 'DELETE_SYSTEM',
+      entityId: req.params.id,
+      requestedData: null,
+      originalData: originalPolicy,
+      requesterId,
+      executeCallback: execute
+    });
+
+    if (interceptResult.pendingApproval) {
+      return sendResponse(res, 202, interceptResult.message, { pendingApproval: true });
+    }
+
     sendResponse(res, 200, 'System policy deleted successfully');
   } catch (error) {
     next(error);
@@ -136,12 +233,38 @@ const saveRolePolicy = async (req, res, next) => {
     }
 
     const created_by = req.user ? req.user.username : 'admin';
-    await LeavePolicyModel.saveRolePolicy({
-      leave_policy_id,
-      role_id,
-      policy_value,
-      created_by
+    const requesterId = req.user ? (req.user.employeeId || req.user.employee_id) : null;
+    const originalPolicy = await LeavePolicyModel.getRolePolicy(role_id);
+
+    const execute = async () => {
+      await LeavePolicyModel.saveRolePolicy({
+        leave_policy_id,
+        role_id,
+        policy_value,
+        created_by
+      });
+      return { success: true };
+    };
+
+    const interceptResult = await interceptApproval({
+      requestType: 'LEAVE_POLICY',
+      actionType: 'SAVE_ROLE',
+      entityId: role_id,
+      requestedData: {
+        leave_policy_id,
+        role_id,
+        policy_value,
+        created_by
+      },
+      originalData: originalPolicy,
+      requesterId,
+      executeCallback: execute
     });
+
+    if (interceptResult.pendingApproval) {
+      return sendResponse(res, 202, interceptResult.message, { pendingApproval: true });
+    }
+
     sendResponse(res, 201, 'Role policy saved successfully');
   } catch (error) {
     next(error);
@@ -167,12 +290,38 @@ const saveEmployeePolicy = async (req, res, next) => {
     }
 
     const created_by = req.user ? req.user.username : 'admin';
-    await LeavePolicyModel.saveEmployeePolicy({
-      leave_policy_id,
-      employee_id,
-      policy_value,
-      created_by
+    const requesterId = req.user ? (req.user.employeeId || req.user.employee_id) : null;
+    const originalPolicy = await LeavePolicyModel.getEmployeePolicy(employee_id);
+
+    const execute = async () => {
+      await LeavePolicyModel.saveEmployeePolicy({
+        leave_policy_id,
+        employee_id,
+        policy_value,
+        created_by
+      });
+      return { success: true };
+    };
+
+    const interceptResult = await interceptApproval({
+      requestType: 'LEAVE_POLICY',
+      actionType: 'SAVE_EMPLOYEE',
+      entityId: employee_id,
+      requestedData: {
+        leave_policy_id,
+        employee_id,
+        policy_value,
+        created_by
+      },
+      originalData: originalPolicy,
+      requesterId,
+      executeCallback: execute
     });
+
+    if (interceptResult.pendingApproval) {
+      return sendResponse(res, 202, interceptResult.message, { pendingApproval: true });
+    }
+
     sendResponse(res, 201, 'Employee policy saved successfully');
   } catch (error) {
     next(error);
