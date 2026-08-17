@@ -182,7 +182,29 @@ const updateEmployee = async (req, res, next) => {
 
 const deleteEmployee = async (req, res, next) => {
   try {
-    await EmployeeModel.delete(req.params.id);
+    const requesterId = req.user.employeeId || req.user.employee_id;
+    const employeeId = req.params.id;
+    const originalEmployee = await EmployeeModel.getById(employeeId);
+
+    const execute = async () => {
+      await EmployeeModel.delete(employeeId);
+      return { success: true };
+    };
+
+    const interceptResult = await interceptApproval({
+      requestType: 'EMPLOYEE',
+      actionType: 'DELETE',
+      entityId: employeeId,
+      requestedData: null,
+      originalData: originalEmployee,
+      requesterId,
+      executeCallback: execute
+    });
+
+    if (interceptResult.pendingApproval) {
+      return sendResponse(res, 202, interceptResult.message, { pendingApproval: true });
+    }
+
     sendResponse(res, 200, 'Employee deleted successfully');
   } catch (error) {
     next(error);

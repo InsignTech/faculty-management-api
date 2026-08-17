@@ -50,11 +50,24 @@ async function interceptApproval({
     }
 
     if (entityId && actionType === 'UPDATE') {
-        const duplicate = pendingRequests.find(r => 
-            r.entity_id && parseInt(r.entity_id) === parseInt(entityId) && r.action_type === 'UPDATE'
-        );
+        const duplicate = pendingRequests.find(r => {
+            const matchesEntity = r.entity_id && parseInt(r.entity_id) === parseInt(entityId) && r.action_type === 'UPDATE';
+            if (!matchesEntity) return false;
+
+            if (requestType === 'APPROVER_CONFIG') {
+                try {
+                    const existingData = JSON.parse(r.requested_data);
+                    return existingData && requestedData && existingData.request_type === requestedData.request_type;
+                } catch (e) {
+                    return false;
+                }
+            }
+            return true;
+        });
+
         if (duplicate) {
-            throw new ErrorResponse(`There is already a pending update request for this entity (REQ-${duplicate.id}). Please wait until it is actioned.`, 409, 'PENDING_APPROVAL_CONFLICT');
+            const subMessage = requestType === 'APPROVER_CONFIG' ? ` for ${requestedData.request_type}` : '';
+            throw new ErrorResponse(`There is already a pending update request for this entity${subMessage} (REQ-${duplicate.id}). Please wait until it is actioned.`, 409, 'PENDING_APPROVAL_CONFLICT');
         }
     }
 
