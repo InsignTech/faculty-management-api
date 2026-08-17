@@ -164,9 +164,32 @@ const assignEmployeeShift = async (req, res, next) => {
 const deleteEmployeeShiftGroup = async (req, res, next) => {
     try {
         const { employee_id, start_date, end_date } = req.body;
-        const affectedRows = await ShiftModel.deleteEmployeeShiftGroup(employee_id, start_date, end_date);
-        
-        if (affectedRows === 0) {
+        const requesterId = req.user.employeeId || req.user.employee_id;
+
+        const execute = async () => {
+            const affectedRows = await ShiftModel.deleteEmployeeShiftGroup(employee_id, start_date, end_date);
+            return affectedRows;
+        };
+
+        const interceptResult = await interceptApproval({
+            requestType: 'SHIFT',
+            actionType: 'DELETE',
+            entityId: employee_id,
+            requestedData: {
+                employee_id,
+                start_date,
+                end_date
+            },
+            originalData: null,
+            requesterId,
+            executeCallback: execute
+        });
+
+        if (interceptResult.pendingApproval) {
+            return sendResponse(res, 202, interceptResult.message, { pendingApproval: true });
+        }
+
+        if (interceptResult.result === 0) {
             return next(new ErrorResponse('No matching shift assignment found to delete', 404));
         }
 
@@ -179,13 +202,35 @@ const deleteEmployeeShiftGroup = async (req, res, next) => {
 const deleteBulkShifts = async (req, res, next) => {
   try {
     const { date, role_id } = req.query;
+    const requesterId = req.user.employeeId || req.user.employee_id;
 
     if (!date && (!role_id || role_id === 'all')) {
       return next(new ErrorResponse('Please specify at least a date or a specific role to delete shifts in bulk', 400));
     }
 
-    const deletedCount = await ShiftModel.deleteBulkShifts({ date, role_id });
-    sendResponse(res, 200, `${deletedCount} shifts deleted successfully`, { deletedCount });
+    const execute = async () => {
+      const deletedCount = await ShiftModel.deleteBulkShifts({ date, role_id });
+      return deletedCount;
+    };
+
+    const interceptResult = await interceptApproval({
+      requestType: 'SHIFT',
+      actionType: 'DELETE_BULK',
+      entityId: null,
+      requestedData: {
+        date,
+        role_id
+      },
+      originalData: null,
+      requesterId,
+      executeCallback: execute
+    });
+
+    if (interceptResult.pendingApproval) {
+      return sendResponse(res, 202, interceptResult.message, { pendingApproval: true });
+    }
+
+    sendResponse(res, 200, `${interceptResult.result} shifts deleted successfully`, { deletedCount: interceptResult.result });
   } catch (error) {
     next(error);
   }

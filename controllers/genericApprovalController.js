@@ -123,6 +123,17 @@ const actionApproval = async (req, res, next) => {
                     requestedData.shifts,
                     requestedData.modified_by
                 );
+            } else if (actionType === 'DELETE') {
+                await ShiftModel.deleteEmployeeShiftGroup(
+                    requestedData.employee_id,
+                    requestedData.start_date,
+                    requestedData.end_date
+                );
+            } else if (actionType === 'DELETE_BULK') {
+                await ShiftModel.deleteBulkShifts({
+                    date: requestedData.date,
+                    role_id: requestedData.role_id
+                });
             }
         } else if (requestType === 'APPROVER_CONFIG') {
             if (actionType === 'UPDATE') {
