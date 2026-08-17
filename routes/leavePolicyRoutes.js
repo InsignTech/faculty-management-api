@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const { protect } = require('../middleware/auth');
 const {
   getSystemPolicies,
   createSystemPolicy,
@@ -14,6 +15,8 @@ const {
   calculateAccrual,
   getPolicyHistory
 } = require('../controllers/leavePolicyController');
+
+router.use(protect);
 
 // System Level
 router.get('/system', getSystemPolicies);
