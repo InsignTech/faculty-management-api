@@ -180,6 +180,25 @@ const requestAdjustment = async (req, res, next) => {
             return next(new ErrorResponse('date or from_date is required for On-Duty', 400));
         }
 
+        // Check if dates are locked by a completed or submitted payroll period
+        const compareDateStr = date || from_date;
+        if (compareDateStr) {
+            const [payrollRows] = await pool.execute(
+                "SELECT MAX(end_date) AS max_locked_date FROM payroll_period WHERE status NOT IN ('draft')"
+            );
+            const maxLockedDateStr = payrollRows[0]?.max_locked_date;
+            if (maxLockedDateStr) {
+                const maxLockedDate = new Date(maxLockedDateStr).toISOString().split('T')[0];
+                const startCompare = new Date(compareDateStr).toISOString().split('T')[0];
+                if (startCompare <= maxLockedDate) {
+                    return next(new ErrorResponse(
+                        `Cannot request adjustment. The requested date (${startCompare}) falls on or before a locked payroll period ending on ${maxLockedDate}.`,
+                        400
+                    ));
+                }
+            }
+        }
+
         const result = await AttendanceModel.requestAdjustment({
             employee_id: targetEmployeeId,
             type,
