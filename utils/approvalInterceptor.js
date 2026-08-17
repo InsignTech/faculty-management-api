@@ -135,7 +135,8 @@ async function interceptApproval({
     }
 
     // 1. Fetch config
-    const config = await OperationApproverConfigModel.getConfig(requestType);
+    const configRequestType = requestType === 'LEAVE_POLICY' ? 'LEAVE' : requestType;
+    const config = await OperationApproverConfigModel.getConfig(configRequestType);
 
     // 2. If no config, bypass and execute immediately
     if (!config || !config.approver_1_id) {
