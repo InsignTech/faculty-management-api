@@ -4,7 +4,7 @@ const SettingsModel = require('./settingsModel');
 class AttendanceModel {
     // Process raw logs for a specific date
     static async processLogs(date) {
-        const [rows] = await pool.execute('CALL sp_process_attendance(?)', [date]);
+        const [rows] = await pool.execute('CALL sp_process_attendance_shiftwise(?)', [date]);
         return rows[0][0];
     }
 
@@ -41,7 +41,7 @@ class AttendanceModel {
             }
 
             if (!latestDate) {
-                const [dailyRows] = await pool.query("SELECT MAX(date) as latest_date FROM attendance_daily");
+                const [dailyRows] = await pool.query("SELECT MAX(date) as latest_date FROM attendance");
                 latestDate = dailyRows[0]?.latest_date;
             }
 
@@ -92,7 +92,7 @@ class AttendanceModel {
         for (const dateStr of sortedDates) {
             try {
                 // Execute stored procedure
-                const [resultRows] = await pool.execute('CALL sp_process_attendance(?)', [dateStr]);
+                const [resultRows] = await pool.execute('CALL sp_process_attendance_shiftwise(?)', [dateStr]);
                 const rowsProcessed = resultRows[0]?.[0]?.processed_rows || 0;
 
                 totalProcessed += rowsProcessed;
@@ -210,7 +210,7 @@ class AttendanceModel {
 
                     // 2. Presence Validation
                     const [presence] = await conn.query(
-                        `SELECT 1 FROM attendance_daily WHERE employee_id = ? AND date = ? AND status = 'Present' LIMIT 1`,
+                        `SELECT 1 FROM attendance WHERE employee_id = ? AND date = ? AND status = 'Present' LIMIT 1`,
                         [employee_id, d]
                     );
 
@@ -272,57 +272,48 @@ class AttendanceModel {
             }
         }
 
-        // 3. Approved State Validation (Check attendance_daily)
+        // 3. Approved State Validation (Check attendance)
         const [attendanceRows] = await pool.query(
-            `SELECT status, first_in_time, last_out_time, is_late, is_early_leaving, 
-                    leave_shift_type, regularization_shift_type, onduty_shift_type 
-             FROM attendance_daily 
+            `SELECT status, first_in_time, last_out_time, is_late, is_early_leaving, shift_type 
+             FROM attendance 
              WHERE employee_id = ? AND date = ?`,
             [employee_id, targetDate]
         );
 
         if (attendanceRows.length > 0) {
-            const row = attendanceRows[0];
-
             // Validation for Regularization
             if (type === 'Regularization') {
                 if (new Date(targetDate) > new Date()) {
                     throw new Error('Regularization cannot be requested for future dates.');
                 }
 
-                // Check if already completely regularized/covered in attendance_daily
-                if (row.regularization_shift_type === 'FullDay' ||
-                    (requestedShift !== 'FullDay' && row.regularization_shift_type === requestedShift)) {
+                // Check if already regularized
+                const isAlreadyRegularized = attendanceRows.some(r => r.status === 'Regularized' && (r.shift_type === 'FullDay' || r.shift_type === requestedShift));
+                if (isAlreadyRegularized) {
                     throw new Error(`This ${requestedShift} shift is already regularized.`);
                 }
 
-                // Strict "Present" Check: If they are Present and not late/early, they don't need regularization
-                // for the shift they are claiming. 
-                if (row.status === 'Present' && row.first_in_time && row.last_out_time) {
-                    if (requestedShift === 'FullDay' && row.is_late === 0 && row.is_early_leaving === 0) {
+                // Strict "Present" Check
+                const targetRow = attendanceRows.find(r => r.shift_type === requestedShift) || attendanceRows.find(r => r.shift_type === 'FullDay');
+                if (targetRow && targetRow.status === 'Present' && targetRow.first_in_time && targetRow.last_out_time) {
+                    if (requestedShift === 'FullDay' && targetRow.is_late === 0 && targetRow.is_early_leaving === 0) {
                         throw new Error('Attendance is already marked as complete and on-time for this date.');
                     }
-                    if (requestedShift === 'FirstHalf' && row.is_late === 0) {
+                    if (requestedShift === 'FirstHalf' && targetRow.is_late === 0) {
                         throw new Error('You were not late in the 1st half, regularization is not required.');
                     }
-                    if (requestedShift === 'SecondHalf' && row.is_early_leaving === 0) {
+                    if (requestedShift === 'SecondHalf' && targetRow.is_early_leaving === 0) {
                         throw new Error('You did not leave early in the 2nd half, regularization is not required.');
                     }
                 }
             }
 
-            // Cross-column overlap check (Approved states in attendance_daily)
-            const activeStates = [
-                { type: 'Leave', shift: row.leave_shift_type },
-                { type: 'Regularization', shift: row.regularization_shift_type },
-                { type: 'On-Duty', shift: row.onduty_shift_type }
-            ];
+            // Cross-column overlap check
+            const activeStates = attendanceRows.filter(r => ['Leave', 'Regularized', 'OnDuty'].includes(r.status));
 
             for (const state of activeStates) {
-                if (state.shift) {
-                    if (state.shift === 'FullDay' || requestedShift === 'FullDay' || state.shift === requestedShift) {
-                        throw new Error(`Overlap Error: This shift is already covered by an approved ${state.type} (${state.shift}).`);
-                    }
+                if (state.shift_type === 'FullDay' || requestedShift === 'FullDay' || state.shift_type === requestedShift) {
+                    throw new Error(`Overlap Error: This shift is already covered by an approved ${state.status} (${state.shift_type}).`);
                 }
             }
         }
@@ -382,22 +373,16 @@ class AttendanceModel {
 
             if (isFinalApproval) {
                 const [overlapCheck] = await conn.execute(
-                    `SELECT leave_shift_type, regularization_shift_type, onduty_shift_type FROM attendance_daily 
+                    `SELECT shift_type, status FROM attendance 
                      WHERE employee_id = ? AND date = ?`,
                     [adj.employee_id, adj.date]
                 );
 
                 if (overlapCheck.length > 0) {
-                    const row = overlapCheck[0];
-                    const activeShifts = [
-                        { type: 'Leave', shift: row.leave_shift_type },
-                        { type: 'Regularization', shift: row.regularization_shift_type },
-                        { type: 'On-Duty', shift: row.onduty_shift_type }
-                    ].filter(s => s.shift !== null);
-
+                    const activeShifts = overlapCheck.filter(r => ['Leave', 'Regularized', 'OnDuty'].includes(r.status));
                     for (const s of activeShifts) {
-                        if (s.shift === 'FullDay' || requestedShift === 'FullDay' || s.shift === requestedShift) {
-                            throw new Error(`Approval Error: This shift is already covered by an approved ${s.type} (${s.shift}).`);
+                        if (s.shift_type === 'FullDay' || requestedShift === 'FullDay' || s.shift_type === requestedShift) {
+                            throw new Error(`Approval Error: This shift is already covered by an approved ${s.status} (${s.shift_type}).`);
                         }
                     }
                 }
@@ -441,102 +426,9 @@ class AttendanceModel {
                 }
             }
 
-            // 4. Fetch current attendance state for smart merge
-            const [attendanceRows] = await conn.execute(
-                `SELECT status, shift_type, leave_shift_type, regularization_shift_type, onduty_shift_type, 
-                        first_in_time, last_out_time 
-                 FROM attendance_daily WHERE employee_id = ? AND date = ?`,
-                [adj.employee_id, adj.date]
-            );
-            const row = attendanceRows[0] || { first_in_time: null, last_out_time: null };
-
-            // 5. Apply changes to attendance table
-            if (adj.request_type === 'Regularization') {
-                // Limit check logic
-                const [countRows] = await conn.execute(
-                    `SELECT COUNT(*) as approved_count FROM attendance_regularization 
-                     WHERE employee_id = ? AND MONTH(date) = ? AND YEAR(date) = ? 
-                     AND status = 'Approved' AND request_type = 'Regularization' AND id != ?`,
-                    [adj.employee_id, v_month, v_year, adjustmentId]
-                );
-                const approvedCount = countRows[0].approved_count;
-
-                let limit = 3;
-                try {
-                    const limitSetting = await SettingsModel.getSettingByKey('regularization_limit');
-                    if (limitSetting?.settings_value) limit = parseInt(limitSetting.settings_value);
-                } catch (err) {
-                    console.error('Limit fetch failed:', err);
-                }
-
-                let finalRegShift = requestedShift;
-                // If already partially regularized, maybe promote to FullDay
-                if (row.regularization_shift_type && row.regularization_shift_type !== 'FullDay' && row.regularization_shift_type !== requestedShift) {
-                    finalRegShift = 'FullDay';
-                }
-
-                // Deduction calculation
-                let deduction = (finalRegShift === 'FullDay') ? 0.00 : 0.50;
-
-                const isFirstHalfCovered = (row.shift_type === 'FirstHalf' || row.shift_type === 'FullDay' ||
-                    row.leave_shift_type === 'FirstHalf' || row.leave_shift_type === 'FullDay' ||
-                    row.regularization_shift_type === 'FirstHalf' || row.onduty_shift_type === 'FirstHalf' || row.onduty_shift_type === 'FullDay');
-                const isSecondHalfCovered = (row.shift_type === 'SecondHalf' || row.shift_type === 'FullDay' ||
-                    row.leave_shift_type === 'SecondHalf' || row.leave_shift_type === 'FullDay' ||
-                    row.regularization_shift_type === 'SecondHalf' || row.onduty_shift_type === 'SecondHalf' || row.onduty_shift_type === 'FullDay');
-
-                if ((requestedShift === 'FirstHalf' && isSecondHalfCovered) ||
-                    (requestedShift === 'SecondHalf' && isFirstHalfCovered) || (finalRegShift === 'FullDay')) {
-                    deduction = 0.00;
-                }
-                if (approvedCount >= limit) deduction += 0.50;
-                if (deduction > 1.0) deduction = 1.0;
-
-                await conn.execute(
-                    `UPDATE attendance_daily SET status = 'Present', regularization_shift_type = ?, deduction_days = ?
-                     WHERE employee_id = ? AND date = ?`,
-                    [finalRegShift, deduction, adj.employee_id, adj.date]
-                );
-            } else if (adj.request_type === 'OnDuty') {
-                let finalOnDutyShift = requestedShift;
-                // If already partially covered, maybe promote
-                if (row.onduty_shift_type && row.onduty_shift_type !== 'FullDay' && row.onduty_shift_type !== requestedShift) {
-                    finalOnDutyShift = 'FullDay';
-                }
-
-                // Check coverage
-                const isFirstHalfCovered = (row.shift_type === 'FirstHalf' || row.shift_type === 'FullDay' ||
-                    row.leave_shift_type === 'FirstHalf' || row.leave_shift_type === 'FullDay' ||
-                    row.regularization_shift_type === 'FirstHalf' || row.regularization_shift_type === 'FullDay' ||
-                    finalOnDutyShift === 'FirstHalf' || finalOnDutyShift === 'FullDay');
-
-                const isSecondHalfCovered = (row.shift_type === 'SecondHalf' || row.shift_type === 'FullDay' ||
-                    row.leave_shift_type === 'SecondHalf' || row.leave_shift_type === 'FullDay' ||
-                    row.regularization_shift_type === 'SecondHalf' || row.regularization_shift_type === 'FullDay' ||
-                    finalOnDutyShift === 'SecondHalf' || finalOnDutyShift === 'FullDay');
-
-                let deduction = (isFirstHalfCovered && isSecondHalfCovered) ? 0.00 : 0.50;
-                if (!isFirstHalfCovered && !isSecondHalfCovered) deduction = 1.00;
-
-                // For OnDuty, we usually set placeholder times if it covers the shift
-                let inTime = row.first_in_time;
-                let outTime = row.last_out_time;
-                if (finalOnDutyShift === 'FullDay') {
-                    inTime = '09:00:00';
-                    outTime = '17:00:00';
-                } else if (finalOnDutyShift === 'FirstHalf' && !inTime) {
-                    inTime = '09:00:00';
-                } else if (finalOnDutyShift === 'SecondHalf' && !outTime) {
-                    outTime = '17:00:00';
-                }
-
-                await conn.execute(
-                    `UPDATE attendance_daily SET status = 'Present', onduty_shift_type = ?, deduction_days = ?,
-                            first_in_time = ?, last_out_time = ?
-                     WHERE employee_id = ? AND date = ?`,
-                    [finalOnDutyShift, deduction, inTime || null, outTime || null, adj.employee_id, adj.date]
-                );
-            }
+            // Call sp_process_attendance_shiftwise to rebuild attendance state
+            const formattedDate = new Date(adj.date).toISOString().split('T')[0];
+            await conn.execute('CALL sp_process_attendance_shiftwise(?)', [formattedDate]);
 
             await conn.commit();
             return { success: true, message: 'Adjustment approved.' };
@@ -627,7 +519,14 @@ class AttendanceModel {
             LEFT JOIN employee ea2 ON ea2.employee_id = aj.approver_2_id
             LEFT JOIN employee sub ON sub.employee_id = aj.substitute_employee_id
             LEFT JOIN employee ap_proxy ON ap_proxy.employee_id = aj.applied_by_id
-            LEFT JOIN attendance_daily ad ON ad.employee_id = aj.employee_id AND ad.date = aj.date
+            LEFT JOIN (
+                SELECT employee_id, date, 
+                       MIN(first_in_time) AS first_in_time, 
+                       MAX(last_out_time) AS last_out_time,
+                       GROUP_CONCAT(status ORDER BY shift_type SEPARATOR ' / ') AS status
+                FROM attendance
+                GROUP BY employee_id, date
+            ) ad ON ad.employee_id = aj.employee_id AND ad.date = aj.date
             WHERE aj.employee_id = ?
         `;
         const params = [employeeId];
@@ -732,7 +631,14 @@ class AttendanceModel {
                 LEFT JOIN employee ea2 ON ea2.employee_id = aj.approver_2_id
                 LEFT JOIN employee sub ON sub.employee_id = aj.substitute_employee_id
                 LEFT JOIN employee ap_proxy ON ap_proxy.employee_id = aj.applied_by_id
-                LEFT JOIN attendance_daily ad ON ad.employee_id = aj.employee_id AND ad.date = aj.date
+                LEFT JOIN (
+                    SELECT employee_id, date, 
+                           MIN(first_in_time) AS first_in_time, 
+                           MAX(last_out_time) AS last_out_time,
+                           GROUP_CONCAT(status ORDER BY shift_type SEPARATOR ' / ') AS status
+                    FROM attendance
+                    GROUP BY employee_id, date
+                ) ad ON ad.employee_id = aj.employee_id AND ad.date = aj.date
                 WHERE 1=1
                 ${statusFilter ? 'AND aj.status = ?' : ""}
                 ORDER BY aj.created_on DESC
@@ -780,7 +686,14 @@ class AttendanceModel {
                 LEFT JOIN employee ea2 ON ea2.employee_id = aj.approver_2_id
                 LEFT JOIN employee sub ON sub.employee_id = aj.substitute_employee_id
                 LEFT JOIN employee ap_proxy ON ap_proxy.employee_id = aj.applied_by_id
-                LEFT JOIN attendance_daily ad ON ad.employee_id = aj.employee_id AND ad.date = aj.date
+                LEFT JOIN (
+                    SELECT employee_id, date, 
+                           MIN(first_in_time) AS first_in_time, 
+                           MAX(last_out_time) AS last_out_time,
+                           GROUP_CONCAT(status ORDER BY shift_type SEPARATOR ' / ') AS status
+                    FROM attendance
+                    GROUP BY employee_id, date
+                ) ad ON ad.employee_id = aj.employee_id AND ad.date = aj.date
                 WHERE (aj.employee_id IN (SELECT employee_id FROM subordinates)
                    ${approverConditions})
                 ${statusFilter ? 'AND aj.status = ?' : ''}
@@ -890,7 +803,7 @@ class AttendanceModel {
                 // We delete it so that the processing engine can decide whether 
                 // it should be 'Present' (if logs exist) or stay empty/Absent.
                 const [result] = await conn.execute(
-                    `DELETE FROM attendance_daily 
+                    `DELETE FROM attendance 
                      WHERE employee_id = ? AND date = ? AND status = 'Leave'`,
                     [employeeId, d]
                 );
@@ -899,7 +812,7 @@ class AttendanceModel {
                     // 2. Try to re-process logs for this date.
                     // If logs exist, it will recreate a 'Present' record.
                     try {
-                        await conn.execute('CALL sp_process_attendance(?)', [d]);
+                        await conn.execute('CALL sp_process_attendance_shiftwise(?)', [d]);
                     } catch (e) {
                         console.error(`Failed to re-process attendance for ${d} during leave reversal:`, e);
                     }
@@ -946,28 +859,20 @@ class AttendanceModel {
             await conn.beginTransaction();
 
             await conn.execute(
-                `INSERT INTO attendance_daily (
+                `DELETE FROM attendance WHERE employee_id = ? AND date = ?`,
+                [employee_id, date]
+            );
+
+            await conn.execute(
+                `INSERT INTO attendance (
                     employee_id, date, status, first_in_time, last_out_time, worked_mins,
-                    is_late, is_early_leaving, deduction_days,
-                    regularization_shift_type, onduty_shift_type, leave_shift_type,
+                    is_late, is_early_leaving, deduction_days, shift_type,
                     created_on
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
-                ON DUPLICATE KEY UPDATE
-                    status = VALUES(status),
-                    first_in_time = VALUES(first_in_time),
-                    last_out_time = VALUES(last_out_time),
-                    worked_mins = VALUES(worked_mins),
-                    is_late = VALUES(is_late),
-                    is_early_leaving = VALUES(is_early_leaving),
-                    deduction_days = VALUES(deduction_days),
-                    regularization_shift_type = VALUES(regularization_shift_type),
-                    onduty_shift_type = VALUES(onduty_shift_type),
-                    leave_shift_type = VALUES(leave_shift_type)`,
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'FullDay', NOW())`,
                 [
                     employee_id, date, status,
                     first_in_time || null, last_out_time || null, worked_mins,
-                    is_late || 0, is_early_leaving || 0, deduction_days || 0.00,
-                    regularization_shift_type || null, onduty_shift_type || null, leave_shift_type || null
+                    is_late || 0, is_early_leaving || 0, deduction_days || 0.00
                 ]
             );
 

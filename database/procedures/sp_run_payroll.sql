@@ -143,7 +143,7 @@ BEGIN
             -- Check if there are any attendance records for this period
             SET v_attendance_count = 0;
             SELECT COUNT(*) INTO v_attendance_count
-            FROM attendance_daily
+            FROM attendance
             WHERE employee_id = v_emp_id AND date BETWEEN v_start_date AND v_end_date;
 
             IF v_attendance_count = 0 THEN
@@ -164,10 +164,10 @@ BEGIN
                 
                 SET v_lop_days = DATEDIFF(v_end_date, CASE WHEN v_effective_joining_date > v_start_date THEN v_effective_joining_date ELSE v_start_date END) + 1 - v_weekend_holiday_count;
             ELSE
-                -- Calculate LOP days from attendance_daily
+                -- Calculate LOP days from attendance table
                 SELECT COALESCE(SUM(deduction_days), 0)
                 INTO v_lop_days
-                FROM attendance_daily
+                FROM attendance
                 WHERE employee_id = v_emp_id AND date BETWEEN v_start_date AND v_end_date;
             END IF;
             

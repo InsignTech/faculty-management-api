@@ -44,22 +44,16 @@ BEGIN
           AND type = 'Regularization'
           AND adjustment_id != p_adjustment_id;
           
-        IF v_approved_count < 3 THEN
-            UPDATE attendance_daily 
-            SET regularization_shift_type = 'FullDay', deduction_days = 0.00, status = 'Present'
-            WHERE employee_id = v_emp_id AND date = v_date;
-        ELSE
-            UPDATE attendance_daily 
-            SET regularization_shift_type = 'FullDay', deduction_days = 0.50, status = 'Present'
-            WHERE employee_id = v_emp_id AND date = v_date;
-        END IF;
+        DELETE FROM attendance WHERE employee_id = v_emp_id AND date = v_date;
+        
+        INSERT INTO attendance (employee_id, date, shift_type, status, deduction_days)
+        VALUES (v_emp_id, v_date, 'FullDay', 'Regularized', IF(v_approved_count < 3, 0.00, 0.50));
     
     ELSEIF v_type = 'OnDuty' THEN
-        -- Mark as Present for both shifts
-        INSERT INTO attendance_daily (employee_id, date, status, first_in_time, last_out_time, onduty_shift_type, deduction_days)
-        VALUES (v_emp_id, v_date, 'Present', '09:00:00', '17:00:00', 'FullDay', 0.00)
-        ON DUPLICATE KEY UPDATE 
-            status = 'Present', first_in_time = '09:00:00', last_out_time = '17:00:00', onduty_shift_type = 'FullDay', deduction_days = 0.00;
+        DELETE FROM attendance WHERE employee_id = v_emp_id AND date = v_date;
+        
+        INSERT INTO attendance (employee_id, date, status, first_in_time, last_out_time, shift_type, deduction_days)
+        VALUES (v_emp_id, v_date, 'OnDuty', '09:00:00', '17:00:00', 'FullDay', 0.00);
     END IF;
     
     SELECT 'Success' as result;

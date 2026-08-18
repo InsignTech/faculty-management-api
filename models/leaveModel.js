@@ -389,18 +389,16 @@ class LeaveModel {
                 const dateStr = d.toISOString().split('T')[0];
 
                 const [adRows] = await conn.execute(
-                    `SELECT regularization_shift_type, is_leave, leave_shift_type, status
-                     FROM attendance_daily
-                     WHERE employee_id = ? AND date = ?
-                     LIMIT 1`,
+                    `SELECT shift_type, status
+                     FROM attendance
+                     WHERE employee_id = ? AND date = ?`,
                     [empId, dateStr]
                 );
 
                 if (!adRows.length) continue;
-                const ad = adRows[0];
 
                 // Skip weekends / holidays
-                if (['WeekEnd', 'Public Holiday', 'Exceptional Holiday'].includes(ad.status)) continue;
+                if (adRows.some(ad => ['WeekEnd', 'Public Holiday', 'Exceptional Holiday'].includes(ad.status))) continue;
 
                 // Check holiday_master
                 const [hmRows] = await conn.execute(
@@ -413,27 +411,29 @@ class LeaveModel {
                 if (hmRows.length) continue;
 
                 // Conflict: regularized / on-duty
-                if (ad.regularization_shift_type) {
-                    if (ad.regularization_shift_type === 'FullDay') {
+                const regConflict = adRows.find(ad => ['Regularized', 'OnDuty'].includes(ad.status));
+                if (regConflict) {
+                    if (regConflict.shift_type === 'FullDay') {
                         throw new Error('Conflict: One or more days are already fully regularized/on-duty');
                     }
-                    if (ad.regularization_shift_type === halfType && halfType !== 'FullDay') {
+                    if (regConflict.shift_type === halfType && halfType !== 'FullDay') {
                         throw new Error('Conflict: This half of the day is already regularized/on-duty');
                     }
-                    if (halfType === 'FullDay' && ad.regularization_shift_type !== 'FullDay') {
+                    if (halfType === 'FullDay' && regConflict.shift_type !== 'FullDay') {
                         throw new Error('Conflict: A part of this day is already regularized/on-duty.');
                     }
                 }
 
                 // Conflict: another approved leave
-                if (ad.is_leave) {
-                    if (ad.leave_shift_type === 'FullDay') {
+                const leaveConflict = adRows.find(ad => ad.status === 'Leave');
+                if (leaveConflict) {
+                    if (leaveConflict.shift_type === 'FullDay') {
                         throw new Error('Conflict: One or more days already have an approved leave');
                     }
-                    if (ad.leave_shift_type === halfType && halfType !== 'FullDay') {
+                    if (leaveConflict.shift_type === halfType && halfType !== 'FullDay') {
                         throw new Error('Conflict: An approved leave already exists for this half-day');
                     }
-                    if (halfType === 'FullDay' && ad.leave_shift_type !== 'FullDay') {
+                    if (halfType === 'FullDay' && leaveConflict.shift_type !== 'FullDay') {
                         throw new Error('Conflict: A part of this day already has an approved leave.');
                     }
                 }
@@ -447,100 +447,10 @@ class LeaveModel {
                 [empId, leaveType, startDate, totalDays, totalDays]
             );
 
-            // ── Phase 3: Update attendance_daily ─────────────────────────────
+            // ── Phase 3: Rebuild attendance records using sp_process_attendance_shiftwise ──
             for (let d = new Date(start); d <= end; d = new Date(d.getTime() + msPerDay)) {
                 const dateStr = d.toISOString().split('T')[0];
-
-                const [adRows] = await conn.execute(
-                    `SELECT first_in_time, last_out_time, worked_mins,
-                            shift_type, status,
-                            regularization_shift_type, onduty_shift_type,
-                            is_leave, leave_shift_type
-                     FROM attendance_daily
-                     WHERE employee_id = ? AND date = ?
-                     LIMIT 1`,
-                    [empId, dateStr]
-                );
-
-                // Skip weekends / holidays
-                if (adRows.length && ['WeekEnd', 'Public Holiday', 'Exceptional Holiday'].includes(adRows[0].status)) continue;
-                const [hmRows] = await conn.execute(
-                    `SELECT 1 FROM holiday_master
-                     WHERE ? BETWEEN holiday_start_date AND holiday_end_date
-                       AND is_active = 1 AND employee_id IN (?, -1) LIMIT 1`,
-                    [dateStr, empId]
-                );
-                if (hmRows.length) continue;
-
-                const ad = adRows[0] || {};
-                const curShift      = ad.shift_type;
-                const regShift      = ad.regularization_shift_type;
-                const odShift       = ad.onduty_shift_type;
-                const isLeaveEx     = ad.is_leave;
-                const leaveShiftEx  = ad.leave_shift_type;
-
-                const isPaid = lr.is_paid === 1 || lr.is_paid === true || lr.is_paid === '1';
-
-                const firstHalf  = (ad.status === 'Present' && ['FirstHalf', 'FullDay'].includes(curShift)) ||
-                                   ['FirstHalf', 'FullDay'].includes(regShift) ||
-                                   ['FirstHalf', 'FullDay'].includes(odShift) ||
-                                   (isLeaveEx && ['FirstHalf', 'FullDay'].includes(leaveShiftEx)) ||
-                                   (isPaid && ['FirstHalf', 'FullDay'].includes(halfType));
-
-                const secondHalf = (ad.status === 'Present' && ['SecondHalf', 'FullDay'].includes(curShift)) ||
-                                   ['SecondHalf', 'FullDay'].includes(regShift) ||
-                                   ['SecondHalf', 'FullDay'].includes(odShift) ||
-                                   (isLeaveEx && ['SecondHalf', 'FullDay'].includes(leaveShiftEx)) ||
-                                   (isPaid && ['SecondHalf', 'FullDay'].includes(halfType));
-
-                const finalShift = (firstHalf && secondHalf) ? 'FullDay'
-                                 : firstHalf                  ? 'FirstHalf'
-                                 : secondHalf                 ? 'SecondHalf'
-                                 : 'Absent';
-
-                let finalDeduct = (!firstHalf && !secondHalf) ? 1.00
-                                  : (firstHalf && secondHalf)   ? 0.00
-                                  : 0.50;
-
-                if (!isPaid) {
-                    finalDeduct = Math.max(Number(ad.deduction_days) || 0.00, finalDeduct);
-                }
-
-                const finalStatus = (finalShift === 'FullDay' || curShift === 'FullDay') ? 'Present' : 'Leave';
-
-                // Determine merged leave_shift_type
-                let mergedLeaveShift = halfType;
-                if (isLeaveEx && leaveShiftEx && leaveShiftEx !== halfType) {
-                    mergedLeaveShift = 'FullDay'; // both halves covered
-                }
-
-                await conn.execute(
-                    `INSERT INTO attendance_daily
-                        (employee_id, date,
-                         first_in_time, last_out_time, worked_mins,
-                         shift_type, status,
-                         is_late, late_minutes,
-                         is_early_leaving, early_minutes,
-                         overtime_minutes, deduction_days,
-                         is_worked_on_holiday,
-                         is_leave, leave_shift_type)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, ?, 0, 1, ?)
-                     ON DUPLICATE KEY UPDATE
-                        status           = VALUES(status),
-                        deduction_days   = VALUES(deduction_days),
-                        is_leave         = 1,
-                        leave_shift_type = VALUES(leave_shift_type)`,
-                    [
-                        empId, dateStr,
-                        ad.first_in_time || null,
-                        ad.last_out_time  || null,
-                        ad.worked_mins    || 0,
-                        finalShift,
-                        finalStatus,
-                        finalDeduct,
-                        mergedLeaveShift
-                    ]
-                );
+                await conn.execute('CALL sp_process_attendance_shiftwise(?)', [dateStr]);
             }
 
             await conn.commit();
@@ -601,92 +511,36 @@ class LeaveModel {
                     [totalDays, lr.employee_id, lr.leave_type, lr.start_date]
                 );
 
-                // B. Revert attendance_daily
+                // Update leave_requests status first so process procedure sees the cancellation
+                await conn.execute(
+                    `UPDATE leave_requests 
+                     SET status = 'Cancelled', 
+                         approved_by_id = ?, 
+                         approved_on = NOW()
+                     WHERE leave_request_id = ?`,
+                    [cancellerId, requestId]
+                );
+
+                // Rebuild attendance using sp_process_attendance_shiftwise
                 const msPerDay = 24 * 60 * 60 * 1000;
                 const start = new Date(lr.start_date);
                 const end = new Date(lr.end_date);
-                const halfType = lr.leave_half_type || 'FullDay';
 
                 for (let d = new Date(start); d <= end; d = new Date(d.getTime() + msPerDay)) {
                     const dateStr = d.toISOString().split('T')[0];
-
-                    const [adRows] = await conn.execute(
-                        `SELECT * FROM attendance_daily WHERE employee_id = ? AND date = ? FOR UPDATE`,
-                        [lr.employee_id, dateStr]
-                    );
-
-                    if (!adRows.length) continue;
-                    const ad = adRows[0];
-
-                    // Determine what remains after removing this leave
-                    let newLeaveShift = null;
-                    let isLeave = 0;
-                    
-                    if (ad.leave_shift_type === 'FullDay' && halfType !== 'FullDay') {
-                        newLeaveShift = halfType === 'FirstHalf' ? 'SecondHalf' : 'FirstHalf';
-                        isLeave = 1;
-                    } else if (ad.leave_shift_type === halfType) {
-                        newLeaveShift = null;
-                        isLeave = 0;
-                    } else {
-                        newLeaveShift = null;
-                        isLeave = 0;
-                    }
-
-                    // Recalculate shift coverage
-                    let curShift = ad.shift_type;
-                    if (!ad.first_in_time && !ad.last_out_time && curShift !== 'Absent') {
-                        // Safe fallback: If they never punched but shift_type was corrupted to FullDay during approval, revert to Absent.
-                        curShift = 'Absent';
-                    }
-
-                    const regShift = ad.regularization_shift_type;
-                    const odShift = ad.onduty_shift_type;
-
-                    const firstHalf = ['FirstHalf', 'FullDay'].includes(curShift) ||
-                                      ['FirstHalf', 'FullDay'].includes(regShift) ||
-                                      ['FirstHalf', 'FullDay'].includes(odShift) ||
-                                      (isLeave && ['FirstHalf', 'FullDay'].includes(newLeaveShift));
-
-                    const secondHalf = ['SecondHalf', 'FullDay'].includes(curShift) ||
-                                       ['SecondHalf', 'FullDay'].includes(regShift) ||
-                                       ['SecondHalf', 'FullDay'].includes(odShift) ||
-                                       (isLeave && ['SecondHalf', 'FullDay'].includes(newLeaveShift));
-
-                    const finalShift = (firstHalf && secondHalf) ? 'FullDay'
-                                     : firstHalf                  ? 'FirstHalf'
-                                     : secondHalf                 ? 'SecondHalf'
-                                     : 'Absent';
-
-                    const finalDeduct = (!firstHalf && !secondHalf) ? 1.00
-                                      : (firstHalf && secondHalf)   ? 0.00
-                                      : 0.50;
-
-                    let finalStatus = (finalShift === 'FullDay' || curShift === 'FullDay') ? 'Present' : 
-                                        isLeave ? 'Leave' : 'Absent';
-
-                    if (['WeekEnd', 'Public Holiday', 'Exceptional Holiday'].includes(ad.status)) {
-                        finalStatus = ad.status;
-                    }
-
-                    await conn.execute(
-                        `UPDATE attendance_daily
-                         SET status = ?, deduction_days = ?, is_leave = ?, leave_shift_type = ?
-                         WHERE employee_id = ? AND date = ?`,
-                        [finalStatus, finalDeduct, isLeave, newLeaveShift, lr.employee_id, dateStr]
-                    );
+                    await conn.execute('CALL sp_process_attendance_shiftwise(?)', [dateStr]);
                 }
+            } else {
+                // Just mark as Cancelled
+                await conn.execute(
+                    `UPDATE leave_requests 
+                     SET status = 'Cancelled', 
+                         approved_by_id = ?, 
+                         approved_on = NOW()
+                     WHERE leave_request_id = ?`,
+                    [cancellerId, requestId]
+                );
             }
-
-            // 3. Mark as Cancelled
-            await conn.execute(
-                `UPDATE leave_requests 
-                 SET status = 'Cancelled', 
-                     approved_by_id = ?, 
-                     approved_on = NOW()
-                 WHERE leave_request_id = ?`,
-                [cancellerId, requestId]
-            );
 
             await conn.commit();
             return { success: true, message: 'Leave request cancelled successfully' };
