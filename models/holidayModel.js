@@ -73,6 +73,7 @@ class HolidayModel {
       holiday_end_date, holiday_type, description, is_active 
     } = holidayData;
 
+    let successOrId;
     if (holiday_id) {
       const [result] = await pool.execute(
         `UPDATE holiday_master 
@@ -81,7 +82,7 @@ class HolidayModel {
          WHERE holiday_id = ?`,
         [employee_id, holiday_name, holiday_start_date, holiday_end_date, holiday_type, description, is_active, holiday_id]
       );
-      return result.affectedRows > 0;
+      successOrId = result.affectedRows > 0;
     } else {
       const [result] = await pool.execute(
         `INSERT INTO holiday_master 
@@ -89,13 +90,49 @@ class HolidayModel {
          VALUES (?, ?, ?, ?, ?, ?, ?, NOW())`,
         [employee_id, holiday_name, holiday_start_date, holiday_end_date, holiday_type, description, is_active]
       );
-      return result.insertId;
+      successOrId = result.insertId;
     }
+
+    // Trigger attendance rebuild for the holiday date range
+    try {
+      const start = holiday_start_date;
+      const end = holiday_end_date || holiday_start_date;
+      const msPerDay = 24 * 60 * 60 * 1000;
+      const startDate = new Date(start);
+      const endDate = new Date(end);
+      for (let d = new Date(startDate); d <= endDate; d = new Date(d.getTime() + msPerDay)) {
+        const dateStr = d.toISOString().split('T')[0];
+        await pool.execute('CALL sp_process_attendance_shiftwise(?)', [dateStr]);
+      }
+    } catch (err) {
+      console.error('Failed to rebuild attendance after saving holiday:', err);
+    }
+
+    return successOrId;
   }
 
   static async deleteHoliday(id) {
+    const holiday = await this.getById(id);
+    if (!holiday) return false;
+
     const [result] = await pool.execute('DELETE FROM holiday_master WHERE holiday_id = ?', [id]);
-    return result.affectedRows > 0;
+    const success = result.affectedRows > 0;
+
+    if (success) {
+      try {
+        const msPerDay = 24 * 60 * 60 * 1000;
+        const startDate = new Date(holiday.holiday_start_date);
+        const endDate = new Date(holiday.holiday_end_date);
+        for (let d = new Date(startDate); d <= endDate; d = new Date(d.getTime() + msPerDay)) {
+          const dateStr = d.toISOString().split('T')[0];
+          await pool.execute('CALL sp_process_attendance_shiftwise(?)', [dateStr]);
+        }
+      } catch (err) {
+        console.error('Failed to rebuild attendance after deleting holiday:', err);
+      }
+    }
+
+    return success;
   }
 
   static async deleteBulkHolidays({ date, role_id, year }) {

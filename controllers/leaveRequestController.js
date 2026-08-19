@@ -206,10 +206,14 @@ const superAdminApplyLeave = async (req, res, next) => {
 
     // Check conflicts if confirmConflicts is not true
     if (!confirmConflicts) {
-      // 1. Get attendance daily logs
+      // 1. Get attendance logs from attendance table
       const [attendanceRows] = await pool.execute(
-        `SELECT date, status, worked_mins, regularization_shift_type, onduty_shift_type, is_leave, leave_shift_type 
-         FROM attendance_daily 
+        `SELECT date, status, worked_mins, 
+                IF(status = 'Regularized', shift_type, NULL) AS regularization_shift_type,
+                IF(status = 'OnDuty', shift_type, NULL) AS onduty_shift_type,
+                IF(status = 'Leave', 1, 0) AS is_leave,
+                IF(status = 'Leave', shift_type, NULL) AS leave_shift_type
+         FROM attendance 
          WHERE employee_id = ? AND date BETWEEN ? AND ?`,
         [employee_id, start_date, end_date]
       );

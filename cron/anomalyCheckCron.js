@@ -23,7 +23,7 @@ cron.schedule('30 19 * * *', async () => {
                 ad.is_early_leaving,
                 ad.early_minutes,
                 ad.deduction_days
-            FROM attendance_daily ad
+            FROM attendance ad
             JOIN employee e ON e.employee_id = ad.employee_id
             WHERE ad.date = CURDATE()
               AND ad.status = 'Present'
@@ -32,10 +32,6 @@ cron.schedule('30 19 * * *', async () => {
                   OR
                   (ad.last_out_time < '16:00:00' AND (COALESCE(ad.is_early_leaving, 0) = 0 OR ad.deduction_days = 0))
               )
-              AND COALESCE(ad.is_leave, 0) = 0
-              AND COALESCE(ad.onduty_shift_type, '') = ''
-              AND COALESCE(ad.regularization_shift_type, '') = ''
-              AND COALESCE(ad.leave_shift_type, '') = ''
             ORDER BY e.employee_name`
         );
 

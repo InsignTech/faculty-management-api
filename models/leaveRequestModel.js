@@ -113,19 +113,19 @@ class LeaveRequestModel {
         if (isConflict) throw new Error('Leave request overlaps with an existing leave.');
       }
 
-      // Check against approved adjustments in attendance_daily
+      // Check against approved adjustments in attendance table
       const [adjOverlaps] = await conn.execute(
-        `SELECT date, regularization_shift_type, onduty_shift_type 
-         FROM attendance_daily 
+        `SELECT date, shift_type, status 
+         FROM attendance 
          WHERE employee_id = ? 
            AND (date BETWEEN ? AND ?)
-           AND (regularization_shift_type IS NOT NULL OR onduty_shift_type IS NOT NULL)`,
+           AND status IN ('Regularized', 'OnDuty')`,
         [employee_id, start_date, end_date]
       );
 
       if (adjOverlaps.length > 0) {
         const isAdjConflict = adjOverlaps.some(adj => {
-          const adjShift = adj.regularization_shift_type || adj.onduty_shift_type;
+          const adjShift = adj.shift_type;
           if (adjShift === 'FullDay') return true;
           if (halfType === 'FullDay') return true;
           if (adjShift === halfType) return true;
