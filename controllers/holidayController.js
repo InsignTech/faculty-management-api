@@ -165,8 +165,29 @@ const cloneHolidays = async (req, res, next) => {
     if (!source_employee_id || !Array.isArray(target_employee_ids) || target_employee_ids.length === 0 || !Array.isArray(holiday_ids) || holiday_ids.length === 0) {
       return next(new ErrorResponse('source_employee_id, target_employee_ids (array), and holiday_ids (array) are required', 400));
     }
-    const result = await HolidayModel.cloneHolidays(source_employee_id, target_employee_ids, holiday_ids);
-    sendResponse(res, 200, 'Holidays cloned successfully', result);
+
+    const requesterId = req.user.employeeId || req.user.employee_id;
+
+    const execute = async () => {
+      const result = await HolidayModel.cloneHolidays(source_employee_id, target_employee_ids, holiday_ids);
+      return result;
+    };
+
+    const interceptResult = await interceptApproval({
+      requestType: 'HOLIDAY',
+      actionType: 'CLONE',
+      entityId: null,
+      requestedData: req.body,
+      originalData: null,
+      requesterId,
+      executeCallback: execute
+    });
+
+    if (interceptResult.pendingApproval) {
+      return sendResponse(res, 202, interceptResult.message, { pendingApproval: true });
+    }
+
+    sendResponse(res, 200, 'Holidays cloned successfully', interceptResult.result);
   } catch (error) {
     next(error);
   }
