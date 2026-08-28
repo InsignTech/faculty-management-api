@@ -117,13 +117,7 @@ const actionApproval = async (req, res, next) => {
             if (actionType === 'UPDATE') {
                 await ShiftModel.updateGlobalShift(entityId, requestedData);
             } else if (actionType === 'ASSIGN') {
-                await ShiftModel.assignEmployeeShifts(
-                    requestedData.employee_id,
-                    requestedData.from_date,
-                    requestedData.to_date,
-                    requestedData.shifts,
-                    requestedData.modified_by
-                );
+                await ShiftModel.assignShiftRequest(requestedData);
             } else if (actionType === 'DELETE') {
                 await ShiftModel.deleteEmployeeShiftGroup(
                     requestedData.employee_id,

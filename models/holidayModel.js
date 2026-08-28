@@ -69,9 +69,37 @@ class HolidayModel {
 
   static async saveHoliday(holidayData) {
     const { 
-      holiday_id, employee_id, holiday_name, holiday_start_date, 
+      holiday_id, employee_id, employee_ids, holiday_name, holiday_start_date, 
       holiday_end_date, holiday_type, description, is_active 
     } = holidayData;
+
+    // Handle batch assignment for multiple employees
+    if (!holiday_id && Array.isArray(employee_ids) && employee_ids.length > 0) {
+      const results = [];
+      for (const emp_id of employee_ids) {
+        try {
+          const result = await this.saveHoliday({
+            holiday_id,
+            employee_id: emp_id,
+            holiday_name,
+            holiday_start_date,
+            holiday_end_date: holiday_end_date || holiday_start_date,
+            holiday_type,
+            description,
+            is_active: is_active !== undefined ? is_active : 1
+          });
+          results.push({ employee_id: emp_id, success: true, result });
+        } catch (error) {
+          // Gracefully handle duplicate keys
+          if (error.code === 'ER_DUP_ENTRY' || error.errno === 1062) {
+            results.push({ employee_id: emp_id, success: false, reason: 'Duplicate entry ignored' });
+          } else {
+            throw error;
+          }
+        }
+      }
+      return results;
+    }
 
     let successOrId;
     if (holiday_id) {

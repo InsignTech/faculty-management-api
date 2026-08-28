@@ -106,6 +106,45 @@ class ShiftModel {
     return result.affectedRows > 0;
   }
 
+  // Resolve employees (from ID or role_id) and assign shifts in bulk
+  static async assignShiftRequest(data) {
+    const { employee_id, role_id, from_date, to_date, shifts, modified_by } = data;
+    
+    let targetEmployeeIds = [];
+    if (employee_id) {
+      targetEmployeeIds.push(employee_id);
+    } else if (role_id) {
+      const roleIds = Array.isArray(role_id) ? role_id : [role_id];
+      const activeRoleIds = roleIds.filter(id => id && id !== 'all');
+      
+      if (activeRoleIds.length > 0) {
+        const [rows] = await pool.query('SELECT employee_id FROM employee WHERE role_id IN (?) AND active = 1', [activeRoleIds]);
+        targetEmployeeIds = rows.map(r => r.employee_id);
+      }
+    }
+
+    const results = [];
+    for (const emp_id of targetEmployeeIds) {
+      try {
+        await this.assignEmployeeShifts(
+          emp_id,
+          from_date,
+          to_date,
+          shifts,
+          modified_by || 'admin'
+        );
+        results.push({ employee_id: emp_id, success: true });
+      } catch (error) {
+        if (error.message && error.message.includes('overlaps')) {
+          results.push({ employee_id: emp_id, success: false, reason: 'Overlap error' });
+        } else {
+          throw error;
+        }
+      }
+    }
+    return results;
+  }
+
   // Bulk create 3 mandatory shifts for an employee
   static async assignEmployeeShifts(employeeId, fromDate, toDate, shifts, createdBy) {
     const conn = await pool.getConnection();
