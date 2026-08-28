@@ -159,6 +159,19 @@ const deleteBulkHolidays = async (req, res, next) => {
   }
 };
 
+const cloneHolidays = async (req, res, next) => {
+  try {
+    const { source_employee_id, target_employee_ids, holiday_ids } = req.body;
+    if (!source_employee_id || !Array.isArray(target_employee_ids) || target_employee_ids.length === 0 || !Array.isArray(holiday_ids) || holiday_ids.length === 0) {
+      return next(new ErrorResponse('source_employee_id, target_employee_ids (array), and holiday_ids (array) are required', 400));
+    }
+    const result = await HolidayModel.cloneHolidays(source_employee_id, target_employee_ids, holiday_ids);
+    sendResponse(res, 200, 'Holidays cloned successfully', result);
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getGeneralHolidays,
   getEmployeeHolidays,
@@ -166,5 +179,6 @@ module.exports = {
   deleteHoliday,
   getUpcomingHolidays,
   getPersonalHolidays,
-  deleteBulkHolidays
+  deleteBulkHolidays,
+  cloneHolidays
 };

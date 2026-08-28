@@ -6,7 +6,8 @@ const {
   deleteHoliday,
   getUpcomingHolidays,
   getPersonalHolidays,
-  deleteBulkHolidays
+  deleteBulkHolidays,
+  cloneHolidays
 } = require('../controllers/holidayController');
 const { protect, authorize } = require('../middleware/auth');
 const router = express.Router();
@@ -23,6 +24,7 @@ router.use(authorize('Admin', 'Principal', 'super_admin', 'admin', 'Super Admin'
 router.get('/general', getGeneralHolidays);
 router.get('/employees', getEmployeeHolidays);
 router.post('/', saveHoliday);
+router.post('/clone', cloneHolidays);
 router.delete('/:id', deleteHoliday);
 router.delete('/', deleteBulkHolidays);
 
