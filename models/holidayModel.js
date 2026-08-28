@@ -48,8 +48,8 @@ class HolidayModel {
     }
 
     if (search) {
-      baseQuery += ' AND (e.employee_name LIKE ? OR e.employee_code LIKE ? OR h.holiday_name LIKE ?)';
-      params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+      baseQuery += ' AND (e.employee_name LIKE ? OR e.employee_code LIKE ? OR h.holiday_name LIKE ? OR TRIM(CONCAT(COALESCE(e.title, ""), " ", e.employee_name)) LIKE ?)';
+      params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`);
     }
 
     const [countResult] = await pool.query(`SELECT COUNT(*) as total ${baseQuery}`, params);
@@ -69,9 +69,37 @@ class HolidayModel {
 
   static async saveHoliday(holidayData) {
     const { 
-      holiday_id, employee_id, holiday_name, holiday_start_date, 
+      holiday_id, employee_id, employee_ids, holiday_name, holiday_start_date, 
       holiday_end_date, holiday_type, description, is_active 
     } = holidayData;
+
+    // Handle batch assignment for multiple employees
+    if (!holiday_id && Array.isArray(employee_ids) && employee_ids.length > 0) {
+      const results = [];
+      for (const emp_id of employee_ids) {
+        try {
+          const result = await this.saveHoliday({
+            holiday_id,
+            employee_id: emp_id,
+            holiday_name,
+            holiday_start_date,
+            holiday_end_date: holiday_end_date || holiday_start_date,
+            holiday_type,
+            description,
+            is_active: is_active !== undefined ? is_active : 1
+          });
+          results.push({ employee_id: emp_id, success: true, result });
+        } catch (error) {
+          // Gracefully handle duplicate keys
+          if (error.code === 'ER_DUP_ENTRY' || error.errno === 1062) {
+            results.push({ employee_id: emp_id, success: false, reason: 'Duplicate entry ignored' });
+          } else {
+            throw error;
+          }
+        }
+      }
+      return results;
+    }
 
     let successOrId;
     if (holiday_id) {
@@ -203,6 +231,75 @@ class HolidayModel {
     query += ' ORDER BY holiday_start_date ASC';
     const [rows] = await pool.query(query, params);
     return rows;
+  }
+
+  static async cloneHolidays(sourceEmployeeId, targetEmployeeIds, holidayIds) {
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+
+      // 1. Fetch selected holidays for the source employee
+      const [sourceHolidays] = await conn.query(
+        `SELECT holiday_name, holiday_start_date, holiday_end_date, holiday_type, description, is_active 
+         FROM holiday_master 
+         WHERE employee_id = ? AND holiday_id IN (?)`,
+        [sourceEmployeeId, holidayIds]
+      );
+
+      if (sourceHolidays.length === 0) {
+        await conn.rollback();
+        return { success: true, message: 'No selected holidays found to clone', insertedCount: 0 };
+      }
+
+      let insertedCount = 0;
+      const uniqueDatesToRebuild = new Set();
+
+      // 2. Insert copy for each target employee (using INSERT IGNORE to skip existing records)
+      for (const targetId of targetEmployeeIds) {
+        for (const h of sourceHolidays) {
+          const formattedStart = new Date(h.holiday_start_date).toISOString().split('T')[0];
+          const formattedEnd = new Date(h.holiday_end_date).toISOString().split('T')[0];
+
+          const [result] = await conn.execute(
+            `INSERT IGNORE INTO holiday_master 
+             (employee_id, holiday_name, holiday_start_date, holiday_end_date, holiday_type, description, is_active, created_on)
+             VALUES (?, ?, ?, ?, ?, ?, ?, NOW())`,
+            [targetId, h.holiday_name, formattedStart, formattedEnd, h.holiday_type, h.description, h.is_active]
+          );
+
+          if (result.affectedRows > 0) {
+            insertedCount++;
+            // Collect dates for attendance rebuild
+            const msPerDay = 24 * 60 * 60 * 1000;
+            const startDate = new Date(formattedStart);
+            const endDate = new Date(formattedEnd);
+            for (let d = new Date(startDate); d <= endDate; d = new Date(d.getTime() + msPerDay)) {
+              uniqueDatesToRebuild.add(d.toISOString().split('T')[0]);
+            }
+          }
+        }
+      }
+
+      await conn.commit();
+
+      // 3. Rebuild attendance for all affected dates
+      if (uniqueDatesToRebuild.size > 0) {
+        for (const dateStr of uniqueDatesToRebuild) {
+          try {
+            await pool.execute('CALL sp_process_attendance_shiftwise(?)', [dateStr]);
+          } catch (err) {
+            console.error('Failed to rebuild attendance during clone for date:', dateStr, err);
+          }
+        }
+      }
+
+      return { success: true, insertedCount };
+    } catch (error) {
+      await conn.rollback();
+      throw error;
+    } finally {
+      conn.release();
+    }
   }
 }
 
