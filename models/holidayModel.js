@@ -48,8 +48,8 @@ class HolidayModel {
     }
 
     if (search) {
-      baseQuery += ' AND (e.employee_name LIKE ? OR e.employee_code LIKE ? OR h.holiday_name LIKE ?)';
-      params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+      baseQuery += ' AND (e.employee_name LIKE ? OR e.employee_code LIKE ? OR h.holiday_name LIKE ? OR TRIM(CONCAT(COALESCE(e.title, ""), " ", e.employee_name)) LIKE ?)';
+      params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`);
     }
 
     const [countResult] = await pool.query(`SELECT COUNT(*) as total ${baseQuery}`, params);

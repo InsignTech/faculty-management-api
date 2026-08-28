@@ -46,8 +46,8 @@ class ShiftModel {
     }
 
     if (search) {
-      baseQuery += ` AND (e.employee_name LIKE ? OR e.employee_code LIKE ?) `;
-      params.push(`%${search}%`, `%${search}%`);
+      baseQuery += ' AND (e.employee_name LIKE ? OR e.employee_code LIKE ? OR TRIM(CONCAT(COALESCE(e.title, ""), " ", e.employee_name)) LIKE ?) ';
+      params.push(`%${search}%`, `%${search}%`, `%${search}%`);
     }
 
     // Get total count of shifts (rows)
