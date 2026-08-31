@@ -10,7 +10,7 @@ BEGIN
     SET v_date = p_start;
 
     WHILE v_date <= p_end DO
-        CALL sp_process_attendance(v_date);
+        CALL sp_process_attendance_shiftwise(v_date);
         SET v_date = DATE_ADD(v_date, INTERVAL 1 DAY);
     END WHILE;
 

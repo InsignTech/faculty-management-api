@@ -144,6 +144,15 @@ async function interceptApproval({
         return { pendingApproval: false, result };
     }
 
+    // If the requester is the final approver (either Level 2, or Level 1 when there's no Level 2), bypass and execute immediately
+    const finalApproverId = config.approver_2_id || config.approver_1_id;
+    const isRequesterFinalApprover = parseInt(requesterId) === parseInt(finalApproverId);
+
+    if (isRequesterFinalApprover) {
+        const result = await executeCallback();
+        return { pendingApproval: false, result };
+    }
+
     // Check if requester is the Level 1 Approver
     const isRequesterLevel1 = parseInt(requesterId) === parseInt(config.approver_1_id);
 

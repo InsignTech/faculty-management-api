@@ -60,18 +60,18 @@ const getMyAttendanceSummary = async (req, res, next) => {
         const month = req.query.month || new Date().getMonth() + 1;
         const year = req.query.year || new Date().getFullYear();
 
-        // Detailed Summary Query
+        // Detailed Summary Query from attendance table
         const [statsRows] = await pool.execute(
             `SELECT 
-                COUNT(*) as total_days,
-                SUM(CASE WHEN status IN ('WeekEnd', 'Public Holiday', 'Exceptional Holiday') THEN 1 ELSE 0 END) as holiday_count,
-                SUM(CASE WHEN status NOT IN ('WeekEnd', 'Public Holiday', 'Exceptional Holiday') THEN 1 ELSE 0 END) as working_days,
+                COUNT(DISTINCT date) as total_days,
+                SUM(CASE WHEN status IN ('WeekEnd', 'Public Holiday', 'Exceptional Holiday') AND shift_type = 'FullDay' THEN 1.0 WHEN status IN ('WeekEnd', 'Public Holiday', 'Exceptional Holiday') AND shift_type IN ('FirstHalf', 'SecondHalf') THEN 0.5 ELSE 0.0 END) as holiday_count,
+                SUM(CASE WHEN status NOT IN ('WeekEnd', 'Public Holiday', 'Exceptional Holiday') AND shift_type = 'FullDay' THEN 1.0 WHEN status NOT IN ('WeekEnd', 'Public Holiday', 'Exceptional Holiday') AND shift_type IN ('FirstHalf', 'SecondHalf') THEN 0.5 ELSE 0.0 END) as working_days,
                 SUM(deduction_days) as total_deductions,
-                SUM(CASE WHEN is_late = 1 AND deduction_days > 0 THEN 1 ELSE 0 END) as late_count,
-                SUM(CASE WHEN is_early_leaving = 1 AND deduction_days > 0 THEN 1 ELSE 0 END) as early_count,
-                SUM(CASE WHEN status = 'Absent' AND deduction_days >= 1 THEN 1 ELSE 0 END) as absent_count,
-                SUM(CASE WHEN regularization_shift_type IS NOT NULL THEN 1 ELSE 0 END) as regularized_count
-             FROM attendance_daily 
+                SUM(is_late) as late_count,
+                SUM(is_early_leaving) as early_count,
+                SUM(CASE WHEN status = 'Absent' AND shift_type = 'FullDay' THEN 1.0 WHEN status = 'Absent' AND shift_type IN ('FirstHalf', 'SecondHalf') THEN 0.5 ELSE 0.0 END) as absent_count,
+                SUM(CASE WHEN status = 'Regularized' AND shift_type = 'FullDay' THEN 1.0 WHEN status = 'Regularized' AND shift_type IN ('FirstHalf', 'SecondHalf') THEN 0.5 ELSE 0.0 END) as regularized_count
+             FROM attendance 
              WHERE employee_id = ? AND MONTH(date) = ? AND YEAR(date) = ?`,
             [targetEmpId, month, year]
         );
