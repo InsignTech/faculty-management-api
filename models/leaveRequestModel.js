@@ -411,16 +411,17 @@ class LeaveRequestModel {
       // Insert directly to bypass sp_apply_leave validations (like the past month check!)
       const [insertResult] = await conn.execute(
         `INSERT INTO leave_requests (
-            employee_id, leave_type, start_date, end_date, total_days,
+            employee_id, leave_type, start_date, end_date, total_days, leave_half_type,
             reason, attachment_path, status, applied_on,
             substitute_employee_id, approver_1_id, approver_2_id, current_level, is_paid
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, ?, 1, ?)`,
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, ?, 1, ?)`,
         [
           employee_id,
           leave_type,
           start_date,
           end_date,
           requestedDays,
+          halfType,
           reason,
           attachment_path || null,
           'Pending',
