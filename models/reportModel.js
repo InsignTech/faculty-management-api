@@ -186,8 +186,17 @@ class ReportModel {
                         status = 'Absent';
                     } 
                     // Irregular (Late/Early)
-                    else if (dayAttendance.is_late === 1 || dayAttendance.is_early_leaving === 1) {
-                        status = 'Regularization Required';
+                    else if (dayAttendance.is_late === 1 && dayAttendance.is_early_leaving === 1) {
+                        status = 'Absent';
+                        remark = 'Late & Early Leaving';
+                    } 
+                    else if (dayAttendance.is_late === 1) {
+                        status = 'First Half Absent';
+                        remark = 'Late Arrival';
+                    } 
+                    else if (dayAttendance.is_early_leaving === 1) {
+                        status = 'Second Half Absent';
+                        remark = 'Early Leaving';
                     } 
                     // Normal Present
                     else {
@@ -219,7 +228,7 @@ class ReportModel {
                     late_minutes: dayAttendance ? dayAttendance.late_minutes : 0,
                     early_minutes: dayAttendance ? dayAttendance.early_minutes : 0,
                     overtime_minutes: dayAttendance ? dayAttendance.overtime_minutes : 0,
-                    deduction_days: dayAttendance ? parseFloat(dayAttendance.deduction_days) : (status === 'Absent' ? 1.00 : 0.00),
+                    deduction_days: dayAttendance ? parseFloat(dayAttendance.deduction_days) : (status === 'Absent' ? 1.00 : (status.includes('Half Absent') ? 0.50 : 0.00)),
                     shift_type: dayAttendance ? dayAttendance.shift_type : null,
                     regularization_shift_type: dayAttendance ? dayAttendance.regularization_shift_type : null,
                     onduty_shift_type: dayAttendance ? dayAttendance.onduty_shift_type : null,
