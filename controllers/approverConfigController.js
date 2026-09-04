@@ -71,6 +71,8 @@ const saveConfig = async (req, res, next) => {
             },
             originalData: null,
             requesterId,
+            requesterRole: req.user?.role,
+            user: req.user,
             executeCallback: execute
         });
 
