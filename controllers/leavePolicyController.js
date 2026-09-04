@@ -95,6 +95,8 @@ const createSystemPolicy = async (req, res, next) => {
       },
       originalData: null,
       requesterId,
+      requesterRole: req.user?.role,
+      user: req.user,
       executeCallback: execute
     });
 
@@ -141,6 +143,8 @@ const updateSystemPolicy = async (req, res, next) => {
       },
       originalData: originalPolicy,
       requesterId,
+      requesterRole: req.user?.role,
+      user: req.user,
       executeCallback: execute
     });
 
@@ -170,6 +174,8 @@ const setActiveSystemPolicy = async (req, res, next) => {
       requestedData: null,
       originalData: null,
       requesterId,
+      requesterRole: req.user?.role,
+      user: req.user,
       executeCallback: execute
     });
 
@@ -201,6 +207,8 @@ const deleteSystemPolicy = async (req, res, next) => {
       requestedData: null,
       originalData: originalPolicy,
       requesterId,
+      requesterRole: req.user?.role,
+      user: req.user,
       executeCallback: execute
     });
 
@@ -258,6 +266,8 @@ const saveRolePolicy = async (req, res, next) => {
       },
       originalData: originalPolicy,
       requesterId,
+      requesterRole: req.user?.role,
+      user: req.user,
       executeCallback: execute
     });
 
@@ -315,6 +325,8 @@ const saveEmployeePolicy = async (req, res, next) => {
       },
       originalData: originalPolicy,
       requesterId,
+      requesterRole: req.user?.role,
+      user: req.user,
       executeCallback: execute
     });
 

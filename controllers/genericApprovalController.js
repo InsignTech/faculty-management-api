@@ -6,16 +6,38 @@ const ShiftModel = require('../models/shiftModel');
 const OperationApproverConfigModel = require('../models/operationApproverConfigModel');
 const ApproverConfigModel = require('../models/approverConfigModel');
 const LeavePolicyModel = require('../models/leavePolicyModel');
+const pool = require('../config/db');
 const { sendResponse } = require('../utils/responseHelper');
 const ErrorResponse = require('../utils/errorResponse');
 
 const getPendingApprovals = async (req, res, next) => {
     try {
         const loggedInEmpId = req.user.employeeId || req.user.employee_id;
-        if (!loggedInEmpId) {
+        const role = (req.user.role || '').toLowerCase();
+        const isSuperAdmin = ['super_admin', 'superadmin', 'super admin'].includes(role) || req.user.roleId === 1;
+
+        if (!loggedInEmpId && !isSuperAdmin) {
             return next(new ErrorResponse('Employee ID not found in token', 400));
         }
-        const pending = await GenericApprovalModel.getPendingForApprover(loggedInEmpId);
+
+        let pending = [];
+        if (isSuperAdmin) {
+            const [rows] = await pool.execute(`
+                SELECT ga.*,
+                       req.employee_name AS requester_name,
+                       a1.employee_name AS approver_1_name,
+                       a2.employee_name AS approver_2_name
+                FROM generic_approvals ga
+                LEFT JOIN employee req ON ga.requester_id = req.employee_id
+                LEFT JOIN employee a1 ON ga.approver_1_id = a1.employee_id
+                LEFT JOIN employee a2 ON ga.approver_2_id = a2.employee_id
+                WHERE ga.status = 'Pending'
+                ORDER BY ga.requested_on DESC
+            `);
+            pending = rows;
+        } else {
+            pending = await GenericApprovalModel.getPendingForApprover(loggedInEmpId);
+        }
         sendResponse(res, 200, 'Pending operations approvals fetched', pending);
     } catch (error) {
         next(error);
@@ -25,10 +47,33 @@ const getPendingApprovals = async (req, res, next) => {
 const getApprovalsHistory = async (req, res, next) => {
     try {
         const loggedInEmpId = req.user.employeeId || req.user.employee_id;
-        if (!loggedInEmpId) {
+        const role = (req.user.role || '').toLowerCase();
+        const isSuperAdmin = ['super_admin', 'superadmin', 'super admin'].includes(role) || req.user.roleId === 1;
+
+        if (!loggedInEmpId && !isSuperAdmin) {
             return next(new ErrorResponse('Employee ID not found in token', 400));
         }
-        const history = await GenericApprovalModel.getApprovalsHistory(loggedInEmpId);
+
+        let history = [];
+        if (isSuperAdmin) {
+            const [rows] = await pool.execute(`
+                SELECT ga.*,
+                       req.employee_name AS requester_name,
+                       a1.employee_name AS approver_1_name,
+                       a2.employee_name AS approver_2_name,
+                       act.employee_name AS actioned_by_name
+                FROM generic_approvals ga
+                LEFT JOIN employee req ON ga.requester_id = req.employee_id
+                LEFT JOIN employee a1 ON ga.approver_1_id = a1.employee_id
+                LEFT JOIN employee a2 ON ga.approver_2_id = a2.employee_id
+                LEFT JOIN employee act ON ga.actioned_by_id = act.employee_id
+                WHERE ga.status != 'Pending'
+                ORDER BY ga.actioned_on DESC, ga.requested_on DESC
+            `);
+            history = rows;
+        } else {
+            history = await GenericApprovalModel.getApprovalsHistory(loggedInEmpId);
+        }
         sendResponse(res, 200, 'Operations approvals history fetched', history);
     } catch (error) {
         next(error);
@@ -54,12 +99,12 @@ const actionApproval = async (req, res, next) => {
             return next(new ErrorResponse('This request is already actioned', 400));
         }
 
-        // Verify authorization
+        // Verify authorization: only the designated approver for current level or Super Admin
         const isApprover1 = approvalRequest.current_level === 1 && approvalRequest.approver_1_id === loggedInEmpId;
         const isApprover2 = approvalRequest.current_level === 2 && approvalRequest.approver_2_id === loggedInEmpId;
-        const isAdmin = ['admin', 'super_admin', 'principal', 'operations manager', 'operations_manager'].includes(req.user.role?.toLowerCase());
+        const isSuperAdmin = ['super_admin', 'superadmin', 'super admin'].includes(req.user.role?.toLowerCase()) || req.user.roleId === 1;
 
-        if (!isApprover1 && !isApprover2 && !isAdmin) {
+        if (!isApprover1 && !isApprover2 && !isSuperAdmin) {
             return next(new ErrorResponse('You are not authorized to action this request', 403));
         }
 
@@ -171,9 +216,10 @@ const checkAccess = async (req, res, next) => {
     try {
         const loggedInEmpId = req.user.employeeId || req.user.employee_id;
         const role = req.user.role?.toLowerCase();
+        const isSuperAdmin = ['super_admin', 'superadmin', 'super admin'].includes(role) || req.user.roleId === 1;
 
-        // Superadmin, principal, and operations manager always have access
-        if (['super_admin', 'principal', 'operations manager', 'operations_manager'].includes(role)) {
+        // Superadmin always has access
+        if (isSuperAdmin) {
             return sendResponse(res, 200, 'Access allowed', { hasAccess: true });
         }
 

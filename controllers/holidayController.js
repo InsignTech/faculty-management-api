@@ -71,6 +71,8 @@ const saveHoliday = async (req, res, next) => {
       requestedData: req.body,
       originalData,
       requesterId,
+      requesterRole: req.user?.role,
+      user: req.user,
       executeCallback: execute
     });
 
@@ -103,6 +105,8 @@ const deleteHoliday = async (req, res, next) => {
       requestedData: null,
       originalData,
       requesterId,
+      requesterRole: req.user?.role,
+      user: req.user,
       executeCallback: execute
     });
 
@@ -180,6 +184,8 @@ const cloneHolidays = async (req, res, next) => {
       requestedData: req.body,
       originalData: null,
       requesterId,
+      requesterRole: req.user?.role,
+      user: req.user,
       executeCallback: execute
     });
 

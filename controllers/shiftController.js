@@ -59,6 +59,8 @@ const updateGlobalShift = async (req, res, next) => {
       requestedData: req.body,
       originalData,
       requesterId,
+      requesterRole: req.user?.role,
+      user: req.user,
       executeCallback: execute
     });
 
@@ -123,6 +125,8 @@ const assignEmployeeShift = async (req, res, next) => {
       },
       originalData: null,
       requesterId,
+      requesterRole: req.user?.role,
+      user: req.user,
       executeCallback: execute
     });
 
@@ -158,6 +162,8 @@ const deleteEmployeeShiftGroup = async (req, res, next) => {
             },
             originalData: null,
             requesterId,
+            requesterRole: req.user?.role,
+            user: req.user,
             executeCallback: execute
         });
 
@@ -199,6 +205,8 @@ const deleteBulkShifts = async (req, res, next) => {
       },
       originalData: null,
       requesterId,
+      requesterRole: req.user?.role,
+      user: req.user,
       executeCallback: execute
     });
 
