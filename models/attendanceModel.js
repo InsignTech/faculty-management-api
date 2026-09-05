@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const pool = require('../config/db');
 const SettingsModel = require('./settingsModel');
 
@@ -143,6 +144,254 @@ class AttendanceModel {
         return rows[0] || [];
     }
 
+    /**
+     * Helper to validate a date range for adjustments (e.g. On-Duty).
+     * Filters out non-working days (weekends, holidays), pre-approved leaves,
+     * duplicate adjustments, and days already marked Present.
+     */
+    static async validateAndFilterRangeDates({ employee_id, type = 'OnDuty', from_date, to_date, shift_type = 'FullDay' }) {
+        if (!from_date || !to_date) {
+            throw new Error('Both from_date and to_date are required for range validation.');
+        }
+
+        const requestedShift = shift_type || 'FullDay';
+
+        // 1. Generate chronological list of dates (using UTC to prevent timezone skew)
+        const [startYear, startMonth, startDay] = from_date.split('-').map(Number);
+        const [endYear, endMonth, endDay] = to_date.split('-').map(Number);
+        const curr = new Date(Date.UTC(startYear, startMonth - 1, startDay));
+        const end = new Date(Date.UTC(endYear, endMonth - 1, endDay));
+
+        if (curr > end) {
+            throw new Error('from_date must be before or equal to to_date.');
+        }
+
+        const allDates = [];
+        while (curr <= end) {
+            const y = curr.getUTCFullYear();
+            const m = String(curr.getUTCMonth() + 1).padStart(2, '0');
+            const d = String(curr.getUTCDate()).padStart(2, '0');
+            allDates.push(`${y}-${m}-${d}`);
+            curr.setUTCDate(curr.getUTCDate() + 1);
+        }
+
+        // 2. Batch fetch Holidays & Weekends from holiday_master
+        const [holidays] = await pool.query(
+            `SELECT holiday_name, holiday_type, 
+                    DATE_FORMAT(holiday_start_date, '%Y-%m-%d') AS start_date,
+                    DATE_FORMAT(holiday_end_date, '%Y-%m-%d') AS end_date
+             FROM holiday_master
+             WHERE is_active = 1
+               AND (employee_id = -1 OR employee_id = ?)
+               AND holiday_start_date <= ? AND holiday_end_date >= ?`,
+            [employee_id, to_date, from_date]
+        );
+
+        // 3. Batch fetch Approved Leaves from leave_requests
+        const [leaves] = await pool.query(
+            `SELECT leave_request_id, leave_type, leave_half_type,
+                    DATE_FORMAT(start_date, '%Y-%m-%d') AS start_date,
+                    DATE_FORMAT(end_date, '%Y-%m-%d') AS end_date
+             FROM leave_requests
+             WHERE employee_id = ?
+               AND status = 'Approved'
+               AND start_date <= ? AND end_date >= ?`,
+            [employee_id, to_date, from_date]
+        );
+
+        // 4. Batch fetch Existing Adjustments from attendance_regularization
+        const [existingAdjustments] = await pool.query(
+            `SELECT id, batch_id, request_type, regularization_shift_type, status,
+                    DATE_FORMAT(date, '%Y-%m-%d') AS date
+             FROM attendance_regularization
+             WHERE employee_id = ?
+               AND status IN ('Pending', 'Approved')
+               AND date BETWEEN ? AND ?`,
+            [employee_id, from_date, to_date]
+        );
+
+        // 5. Batch fetch daily Attendance records (for past processed dates)
+        const [attendanceRows] = await pool.query(
+            `SELECT shift_type, status, DATE_FORMAT(date, '%Y-%m-%d') AS date
+             FROM attendance
+             WHERE employee_id = ?
+               AND date BETWEEN ? AND ?`,
+            [employee_id, from_date, to_date]
+        );
+
+        const applicableDates = [];
+        const skippedWeekends = [];
+        const skippedHolidays = [];
+        const skippedLeaves = [];
+        const skippedExisting = [];
+        const skippedPresent = [];
+
+        for (const dateStr of allDates) {
+            const dateObj = new Date(dateStr + 'T00:00:00Z');
+            const dayOfWeek = dateObj.getUTCDay(); // 0 = Sunday
+
+            // A. Check Weekend: Universal Sunday OR marked as WeekEnd in holiday_master
+            const isWeekendHoliday = holidays.find(h => 
+                h.holiday_type === 'WeekEnd' && dateStr >= h.start_date && dateStr <= h.end_date
+            );
+            if (dayOfWeek === 0 || isWeekendHoliday) {
+                skippedWeekends.push({
+                    date: dateStr,
+                    reason: isWeekendHoliday ? (isWeekendHoliday.holiday_name || 'Weekly Off') : 'Sunday Weekly Off'
+                });
+                continue;
+            }
+
+            // B. Check Public / Other Holidays
+            const holiday = holidays.find(h => 
+                h.holiday_type !== 'WeekEnd' && dateStr >= h.start_date && dateStr <= h.end_date
+            );
+            if (holiday) {
+                skippedHolidays.push({
+                    date: dateStr,
+                    holiday_name: holiday.holiday_name,
+                    holiday_type: holiday.holiday_type
+                });
+                continue;
+            }
+
+            // C. Check Approved Leaves (either from leave_requests or processed attendance)
+            const leave = leaves.find(l => {
+                if (dateStr >= l.start_date && dateStr <= l.end_date) {
+                    if (l.leave_half_type === 'FullDay' || requestedShift === 'FullDay' || l.leave_half_type === requestedShift) {
+                        return true;
+                    }
+                }
+                return false;
+            });
+            const attLeave = attendanceRows.find(a => 
+                a.date === dateStr && a.status === 'Leave' &&
+                (a.shift_type === 'FullDay' || requestedShift === 'FullDay' || a.shift_type === requestedShift)
+            );
+
+            if (leave || attLeave) {
+                skippedLeaves.push({
+                    date: dateStr,
+                    leave_type: leave ? leave.leave_type : 'Approved Leave',
+                    shift: leave ? leave.leave_half_type : (attLeave ? attLeave.shift_type : 'FullDay')
+                });
+                continue;
+            }
+
+            // D. Check Existing Adjustments (Pending/Approved)
+            const existingAdj = existingAdjustments.find(ea => 
+                ea.date === dateStr && 
+                (ea.regularization_shift_type === 'FullDay' || requestedShift === 'FullDay' || ea.regularization_shift_type === requestedShift)
+            );
+            if (existingAdj) {
+                skippedExisting.push({
+                    date: dateStr,
+                    request_type: existingAdj.request_type,
+                    status: existingAdj.status,
+                    shift: existingAdj.regularization_shift_type
+                });
+                continue;
+            }
+
+            // E. Check if already marked as Present (for past dates)
+            const presentRow = attendanceRows.find(a => a.date === dateStr && a.status === 'Present');
+            if (presentRow) {
+                skippedPresent.push({
+                    date: dateStr,
+                    reason: 'Already marked as Present'
+                });
+                continue;
+            }
+
+            // F. Date is valid for adjustment
+            applicableDates.push(dateStr);
+        }
+
+        return {
+            total_calendar_days: allDates.length,
+            applicable_days: applicableDates.length,
+            applicable_dates: applicableDates,
+            skipped: {
+                weekends: skippedWeekends,
+                holidays: skippedHolidays,
+                leaves: skippedLeaves,
+                existing_adjustments: skippedExisting,
+                already_present: skippedPresent,
+                total_skipped: skippedWeekends.length + skippedHolidays.length + skippedLeaves.length + skippedExisting.length + skippedPresent.length
+            }
+        };
+    }
+
+    // Handle Date Range for On-Duty
+    static async handleDateRangeOnDuty(data, approver1, approver2) {
+        const {
+            employee_id, type, from_date, to_date,
+            requested_in_time, requested_out_time,
+            regularization_shift_type,
+            reason, substitute_employee_id
+        } = data;
+
+        const shiftType = regularization_shift_type || 'FullDay';
+        const rangeAnalysis = await this.validateAndFilterRangeDates({
+            employee_id,
+            type,
+            from_date,
+            to_date,
+            shift_type: shiftType
+        });
+
+        if (rangeAnalysis.applicable_days === 0) {
+            const reasons = [];
+            if (rangeAnalysis.skipped.weekends.length) reasons.push(`${rangeAnalysis.skipped.weekends.length} weekend(s)`);
+            if (rangeAnalysis.skipped.holidays.length) reasons.push(`${rangeAnalysis.skipped.holidays.length} holiday(s)`);
+            if (rangeAnalysis.skipped.leaves.length) reasons.push(`${rangeAnalysis.skipped.leaves.length} approved leave(s)`);
+            if (rangeAnalysis.skipped.existing_adjustments.length) reasons.push(`${rangeAnalysis.skipped.existing_adjustments.length} existing adjustment(s)`);
+            if (rangeAnalysis.skipped.already_present.length) reasons.push(`${rangeAnalysis.skipped.already_present.length} already present day(s)`);
+
+            throw new Error(
+                `No valid working days found in the selected range (${from_date} to ${to_date}). Excluded: ${reasons.join(', ')}.`
+            );
+        }
+
+        const batchId = crypto.randomUUID();
+        const conn = await pool.getConnection();
+        try {
+            await conn.beginTransaction();
+
+            const skippedSummaryJson = JSON.stringify({
+                weekends: rangeAnalysis.skipped.weekends.length,
+                holidays: rangeAnalysis.skipped.holidays.length,
+                leaves: rangeAnalysis.skipped.leaves.length,
+                existing_adjustments: rangeAnalysis.skipped.existing_adjustments.length,
+                already_present: rangeAnalysis.skipped.already_present.length,
+                total_skipped: rangeAnalysis.skipped.total_skipped,
+                skipped: rangeAnalysis.skipped
+            });
+
+            for (const d of rangeAnalysis.applicable_dates) {
+                await conn.execute(
+                    `INSERT INTO attendance_regularization 
+                    (batch_id, employee_id, request_type, date, requested_in_time, requested_out_time, regularization_shift_type, reason, status, created_on, substitute_employee_id, approver_1_id, approver_2_id, applied_by_id, is_proxy, range_from_date, range_to_date, range_calendar_days, range_skipped_summary) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Pending', NOW(), ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                    [batchId, employee_id, type, d, requested_in_time || null, requested_out_time || null, shiftType, reason, substitute_employee_id || null, approver1, approver2, data.applied_by_id || null, data.is_proxy || 0, from_date, to_date, rangeAnalysis.total_calendar_days, skippedSummaryJson]
+                );
+            }
+
+            await conn.commit();
+            return {
+                success: true,
+                count: rangeAnalysis.applicable_days,
+                batch_id: batchId,
+                range_analysis: rangeAnalysis
+            };
+        } catch (err) {
+            await conn.rollback();
+            throw err;
+        } finally {
+            conn.release();
+        }
+    }
+
     // Request an adjustment (Regularization / On-Duty)
     static async requestAdjustment(data) {
         const {
@@ -181,60 +430,7 @@ class AttendanceModel {
 
         // Handle Date Range for On-Duty
         if (type === 'OnDuty' && from_date && to_date && from_date !== to_date) {
-            const start = new Date(from_date);
-            const end = new Date(to_date);
-            const dates = [];
-
-            // Loop through dates
-            let current = new Date(start);
-            while (current <= end) {
-                dates.push(current.toISOString().split('T')[0]);
-                current.setDate(current.getDate() + 1);
-            }
-
-            const conn = await pool.getConnection();
-            try {
-                await conn.beginTransaction();
-
-                for (const d of dates) {
-                    // 1. Duplicate Check
-                    const [duplicates] = await conn.query(
-                        `SELECT status FROM attendance_regularization 
-                         WHERE employee_id = ? AND date = ? AND request_type = ? AND status IN ('Pending', 'Approved')`,
-                        [employee_id, d, type]
-                    );
-
-                    if (duplicates.length > 0) {
-                        throw new Error(`An On-Duty request already exists for ${d}.`);
-                    }
-
-                    // 2. Presence Validation
-                    const [presence] = await conn.query(
-                        `SELECT 1 FROM attendance WHERE employee_id = ? AND date = ? AND status = 'Present' LIMIT 1`,
-                        [employee_id, d]
-                    );
-
-                    if (presence.length > 0) {
-                        throw new Error(`You are already marked as Present on ${d}. You cannot request On-Duty for this date.`);
-                    }
-
-                    // 3. Insert
-                    await conn.execute(
-                        `INSERT INTO attendance_regularization 
-                        (employee_id, request_type, date, requested_in_time, requested_out_time, regularization_shift_type, reason, status, created_on, substitute_employee_id, approver_1_id, approver_2_id, applied_by_id, is_proxy) 
-                        VALUES (?, ?, ?, ?, ?, ?, ?, 'Pending', NOW(), ?, ?, ?, ?, ?)`,
-                        [employee_id, type, d, requested_in_time || null, requested_out_time || null, regularization_shift_type || 'FullDay', reason, substitute_employee_id || null, approver1, approver2, data.applied_by_id || null, data.is_proxy || 0]
-                    );
-                }
-
-                await conn.commit();
-                return { success: true, count: dates.length };
-            } catch (err) {
-                await conn.rollback();
-                throw err;
-            } finally {
-                conn.release();
-            }
+            return this.handleDateRangeOnDuty(data, approver1, approver2);
         }
 
         // Single Date Logic (Regularization or single-day On-Duty)
@@ -287,6 +483,15 @@ class AttendanceModel {
                     throw new Error('Regularization cannot be requested for future dates.');
                 }
 
+                // Disallow regularization on weekend/holiday if employee never punched
+                const isHolidayWithoutPunches = attendanceRows.some(r => 
+                    ['WeekEnd', 'Public Holiday', 'Exceptional Holiday', 'Vacation'].includes(r.status) &&
+                    !r.first_in_time && !r.last_out_time
+                );
+                if (isHolidayWithoutPunches) {
+                    throw new Error('Cannot regularize attendance on a Weekend or Public Holiday without punch records.');
+                }
+
                 // Check if already regularized
                 const isAlreadyRegularized = attendanceRows.some(r => r.status === 'Regularized' && (r.shift_type === 'FullDay' || r.shift_type === requestedShift));
                 if (isAlreadyRegularized) {
@@ -318,40 +523,77 @@ class AttendanceModel {
             }
         }
 
+        const batchId = crypto.randomUUID();
         const [result] = await pool.execute(
             `INSERT INTO attendance_regularization 
-            (employee_id, request_type, date, requested_in_time, requested_out_time, regularization_shift_type, reason, status, created_on, substitute_employee_id, approver_1_id, approver_2_id, applied_by_id, is_proxy) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'Pending', NOW(), ?, ?, ?, ?, ?)`,
-            [employee_id, type, targetDate, requested_in_time || null, requested_out_time || null, regularization_shift_type || 'FullDay', reason, substitute_employee_id || null, approver1, approver2, data.applied_by_id || null, data.is_proxy || 0]
+            (batch_id, employee_id, request_type, date, requested_in_time, requested_out_time, regularization_shift_type, reason, status, created_on, substitute_employee_id, approver_1_id, approver_2_id, applied_by_id, is_proxy) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Pending', NOW(), ?, ?, ?, ?, ?)`,
+            [batchId, employee_id, type, targetDate, requested_in_time || null, requested_out_time || null, regularization_shift_type || 'FullDay', reason, substitute_employee_id || null, approver1, approver2, data.applied_by_id || null, data.is_proxy || 0]
         );
 
-        return { adjustment_id: result.insertId };
+        return { adjustment_id: result.insertId, batch_id: batchId };
     }
 
-    // Approve an adjustment and trigger deduction recalculation
-    static async approveAdjustment(adjustmentId, approverId, remarks, substituteEmployeeId = null) {
+    // Preview adjustment range before submission
+    static async previewAdjustmentRange(params) {
+        return this.validateAndFilterRangeDates(params);
+    }
+
+    // Helper to resolve batch rows safely without MySQL string-to-int type coercion on integer column `id`
+    static async _resolveBatchRows(connOrPool, batchIdentifier) {
+        if (!batchIdentifier) return { batchId: null, rows: [] };
+        const strId = String(batchIdentifier).trim();
+        let batchId = strId;
+
+        // 1. Try lookup by batch_id first
+        let [rows] = await connOrPool.execute(
+            'SELECT * FROM attendance_regularization WHERE batch_id = ?',
+            [batchId]
+        );
+
+        // 2. If not found by batch_id and identifier is purely numeric, lookup by integer id
+        if (!rows.length && /^\d+$/.test(strId)) {
+            const numId = Number(strId);
+            const [idRows] = await connOrPool.execute(
+                'SELECT * FROM attendance_regularization WHERE id = ?',
+                [numId]
+            );
+            if (idRows.length) {
+                batchId = idRows[0].batch_id || strId;
+                if (idRows[0].batch_id) {
+                    [rows] = await connOrPool.execute(
+                        'SELECT * FROM attendance_regularization WHERE batch_id = ?',
+                        [batchId]
+                    );
+                } else {
+                    rows = idRows;
+                }
+            }
+        }
+
+        return { batchId, rows };
+    }
+
+    // Approve an adjustment batch (or single record) and trigger deduction recalculation
+    static async approveBatchAdjustment(batchIdentifier, approverId, remarks, substituteEmployeeId = null) {
         const conn = await pool.getConnection();
         try {
             await conn.beginTransaction();
 
-            // 1. Get the adjustment record
-            const [adjRows] = await conn.execute(
-                'SELECT * FROM attendance_regularization WHERE id = ?', [adjustmentId]
-            );
-            if (!adjRows.length) throw new Error('Adjustment not found');
+            // 1. Resolve batch rows safely
+            const { batchId, rows: adjRows } = await this._resolveBatchRows(conn, batchIdentifier);
+            if (!adjRows.length) throw new Error('Adjustment batch not found');
 
-            const adj = adjRows[0];
-            if (adj.status !== 'Pending') {
-                throw new Error('Only Pending requests can be approved');
+            const pendingRows = adjRows.filter(r => r.status === 'Pending');
+            if (!pendingRows.length) {
+                throw new Error('No pending requests found in this batch (already processed)');
             }
 
-            const v_month = new Date(adj.date).getMonth() + 1;
-            const v_year = new Date(adj.date).getFullYear();
-
-            const currentLevel = adj.current_level || 1;
+            const representative = pendingRows[0];
+            const currentLevel = representative.current_level || 1;
 
             // Check designated active level approver
-            const expectedApproverId = (currentLevel === 1) ? adj.approver_1_id : adj.approver_2_id;
+            const expectedApproverId = (currentLevel === 1) ? representative.approver_1_id : representative.approver_2_id;
             if (approverId !== expectedApproverId) {
                 const [roleRows] = await conn.execute(
                     `SELECT r.role FROM employee e 
@@ -360,47 +602,46 @@ class AttendanceModel {
                     [approverId]
                 );
                 const role = roleRows[0]?.role?.toLowerCase();
-                const isAdminOverride = ['super_admin'].includes(role);
+                const isAdminOverride = ['super_admin', 'admin', 'principal'].includes(role);
                 if (!isAdminOverride) {
                     throw new Error(`You are not the designated Level ${currentLevel} approver for this request.`);
                 }
             }
 
-            // 2. Check for overlapping approved states in attendance_daily (only on final approval)
-            const isFinalApproval = !(currentLevel === 1 && adj.approver_2_id);
-
-            const requestedShift = adj.regularization_shift_type || 'FullDay';
-
+            // 2. Check for overlapping approved states in attendance (only on final approval)
+            const isFinalApproval = !(currentLevel === 1 && representative.approver_2_id);
             if (isFinalApproval) {
-                const [overlapCheck] = await conn.execute(
-                    `SELECT shift_type, status FROM attendance 
-                     WHERE employee_id = ? AND date = ?`,
-                    [adj.employee_id, adj.date]
-                );
+                for (const adj of pendingRows) {
+                    const requestedShift = adj.regularization_shift_type || 'FullDay';
+                    const [overlapCheck] = await conn.execute(
+                        `SELECT shift_type, status FROM attendance WHERE employee_id = ? AND date = ?`,
+                        [adj.employee_id, adj.date]
+                    );
 
-                if (overlapCheck.length > 0) {
-                    const activeShifts = overlapCheck.filter(r => ['Leave', 'Regularized', 'OnDuty'].includes(r.status));
-                    for (const s of activeShifts) {
-                        if (s.shift_type === 'FullDay' || requestedShift === 'FullDay' || s.shift_type === requestedShift) {
-                            throw new Error(`Approval Error: This shift is already covered by an approved ${s.status} (${s.shift_type}).`);
+                    if (overlapCheck.length > 0) {
+                        const activeShifts = overlapCheck.filter(r => ['Leave', 'Regularized', 'OnDuty'].includes(r.status));
+                        for (const s of activeShifts) {
+                            if (s.shift_type === 'FullDay' || requestedShift === 'FullDay' || s.shift_type === requestedShift) {
+                                throw new Error(`Approval Error for date ${adj.date}: This shift is already covered by an approved ${s.status} (${s.shift_type}).`);
+                            }
                         }
                     }
                 }
             }
 
-            // 3. Update request status / level
-            if (currentLevel === 1 && adj.approver_2_id) {
-                // Level 1 Approval only - Advance to Level 2
+            // 3. Update request status / level for all pending records in batch
+            if (currentLevel === 1 && representative.approver_2_id) {
+                // Level 1 Approval only - Advance all in batch to Level 2
                 await conn.execute(
                     `UPDATE attendance_regularization 
                      SET approver_1_remarks = ?, approver_1_action_on = NOW(), 
                          current_level = 2,
                          substitute_employee_id = COALESCE(?, substitute_employee_id)
-                     WHERE id = ?`,
-                    [remarks || '', substituteEmployeeId || null, adjustmentId]
+                     WHERE batch_id = ? AND status = 'Pending'`,
+                    [remarks || '', substituteEmployeeId || null, batchId]
                 );
                 await conn.commit();
-                return { success: true, message: 'Level 1 approved, pending Level 2.' };
+                return { success: true, count: pendingRows.length, message: `Level 1 approved for ${pendingRows.length} day(s), pending Level 2.` };
             } else {
                 // Final Approval (either level 2, or level 1 with no level 2 configured)
                 if (currentLevel === 1) {
@@ -410,8 +651,8 @@ class AttendanceModel {
                              approver_1_remarks = ?, approver_1_action_on = NOW(),
                              reason = CONCAT(COALESCE(reason, ''), ' | Final Approval: ', ?),
                              substitute_employee_id = COALESCE(?, substitute_employee_id)
-                         WHERE id = ?`,
-                        [approverId, remarks || '', remarks || '', substituteEmployeeId || null, adjustmentId]
+                         WHERE batch_id = ? AND status = 'Pending'`,
+                        [approverId, remarks || '', remarks || '', substituteEmployeeId || null, batchId]
                     );
                 } else {
                     await conn.execute(
@@ -420,18 +661,20 @@ class AttendanceModel {
                              approver_2_remarks = ?, approver_2_action_on = NOW(),
                              reason = CONCAT(COALESCE(reason, ''), ' | Final Approval: ', ?),
                              substitute_employee_id = COALESCE(?, substitute_employee_id)
-                         WHERE id = ?`,
-                        [approverId, remarks || '', remarks || '', substituteEmployeeId || null, adjustmentId]
+                         WHERE batch_id = ? AND status = 'Pending'`,
+                        [approverId, remarks || '', remarks || '', substituteEmployeeId || null, batchId]
                     );
                 }
+
+                // Rebuild attendance state for each unique date in the batch
+                const uniqueDates = [...new Set(pendingRows.map(r => new Date(r.date).toISOString().split('T')[0]))];
+                for (const d of uniqueDates) {
+                    await conn.execute('CALL sp_process_attendance_shiftwise(?)', [d]);
+                }
+
+                await conn.commit();
+                return { success: true, count: pendingRows.length, message: `Adjustment approved for ${pendingRows.length} day(s).` };
             }
-
-            // Call sp_process_attendance_shiftwise to rebuild attendance state
-            const formattedDate = new Date(adj.date).toISOString().split('T')[0];
-            await conn.execute('CALL sp_process_attendance_shiftwise(?)', [formattedDate]);
-
-            await conn.commit();
-            return { success: true, message: 'Adjustment approved.' };
         } catch (err) {
             await conn.rollback();
             throw err;
@@ -440,19 +683,21 @@ class AttendanceModel {
         }
     }
 
-    // Reject an adjustment
-    static async rejectAdjustment(adjustmentId, approverId, remarks) {
-        // Load the adjustment to check current level
-        const [adjRows] = await pool.execute(
-            'SELECT current_level, approver_1_id, approver_2_id FROM attendance_regularization WHERE id = ?',
-            [adjustmentId]
-        );
+    // Approve an adjustment (delegates to approveBatchAdjustment)
+    static async approveAdjustment(adjustmentId, approverId, remarks, substituteEmployeeId = null) {
+        return this.approveBatchAdjustment(adjustmentId, approverId, remarks, substituteEmployeeId);
+    }
+
+    // Reject an adjustment batch (or single record)
+    static async rejectBatchAdjustment(batchIdentifier, approverId, remarks) {
+        const { batchId, rows: adjRows } = await this._resolveBatchRows(pool, batchIdentifier);
         if (!adjRows.length) throw new Error('Adjustment not found');
-        const adj = adjRows[0];
-        const currentLevel = adj.current_level || 1;
+
+        const representative = adjRows.find(r => r.status === 'Pending') || adjRows[0];
+        const currentLevel = representative.current_level || 1;
 
         // Check designated active level approver
-        const expectedApproverId = (currentLevel === 1) ? adj.approver_1_id : adj.approver_2_id;
+        const expectedApproverId = (currentLevel === 1) ? representative.approver_1_id : representative.approver_2_id;
         if (approverId !== expectedApproverId) {
             const [roleRows] = await pool.execute(
                 `SELECT r.role FROM employee e 
@@ -461,7 +706,7 @@ class AttendanceModel {
                 [approverId]
             );
             const role = roleRows[0]?.role?.toLowerCase();
-            const isAdminOverride = ['super_admin'].includes(role);
+            const isAdminOverride = ['super_admin', 'admin', 'principal'].includes(role);
             if (!isAdminOverride) {
                 throw new Error(`You are not the designated Level ${currentLevel} approver for this request.`);
             }
@@ -474,45 +719,89 @@ class AttendanceModel {
             query = `UPDATE attendance_regularization 
                      SET status = 'Rejected', approved_by = ?, approved_on = NOW(),
                          approver_1_remarks = ?, approver_1_action_on = NOW()
-                     WHERE id = ?`;
-            params = [approverId, remarks || '', adjustmentId];
+                     WHERE batch_id = ? AND status = 'Pending'`;
+            params = [approverId, remarks || '', batchId];
         } else {
             query = `UPDATE attendance_regularization 
                      SET status = 'Rejected', approved_by = ?, approved_on = NOW(),
                          approver_2_remarks = ?, approver_2_action_on = NOW()
-                     WHERE id = ?`;
-            params = [approverId, remarks || '', adjustmentId];
+                     WHERE batch_id = ? AND status = 'Pending'`;
+            params = [approverId, remarks || '', batchId];
         }
 
         const [rows] = await pool.execute(query, params);
         return { affected_rows: rows.affectedRows };
     }
 
-    // Delete a pending adjustment
-    static async deleteAdjustment(adjustmentId, employeeId) {
+    // Reject an adjustment (delegates to rejectBatchAdjustment)
+    static async rejectAdjustment(adjustmentId, approverId, remarks) {
+        return this.rejectBatchAdjustment(adjustmentId, approverId, remarks);
+    }
+
+    // Delete a pending adjustment batch (or single record)
+    static async deleteBatchAdjustment(batchIdentifier, employeeId) {
+        const { batchId, rows: adjRows } = await this._resolveBatchRows(pool, batchIdentifier);
+        const pendingUserRows = adjRows.filter(r => r.status === 'Pending' && r.employee_id === Number(employeeId));
+        if (!pendingUserRows.length) {
+            return { affected_rows: 0 };
+        }
         const [rows] = await pool.execute(
             `DELETE FROM attendance_regularization 
-             WHERE id = ? AND employee_id = ? AND status = 'Pending'`,
-            [adjustmentId, employeeId]
+             WHERE batch_id = ? AND employee_id = ? AND status = 'Pending'`,
+            [batchId, employeeId]
         );
         return { affected_rows: rows.affectedRows };
     }
 
-    // Get adjustment history for an employee with filters
+    // Delete a pending adjustment (delegates to deleteBatchAdjustment)
+    static async deleteAdjustment(adjustmentId, employeeId) {
+        return this.deleteBatchAdjustment(adjustmentId, employeeId);
+    }
+
+    // Get adjustment history for an employee with filters (aggregated by batch)
     static async getEmployeeAdjustments(employeeId, month = null, year = null) {
         let query = `
-            SELECT aj.*, e.employee_name as approver_name,
-                   ea1.employee_name AS approver_1_name,
-                   ea1.employee_code AS approver_1_code,
-                   ea2.employee_name AS approver_2_name,
-                   ea2.employee_code AS approver_2_code,
-                   ad.first_in_time AS actual_in_time,
-                   ad.last_out_time AS actual_out_time,
-                   ad.status AS actual_status,
-                   sub.employee_name AS substitute_name,
-                   sub.employee_code AS substitute_code,
-                   ap_proxy.employee_name AS applied_by_name,
-                   ap_proxy.employee_code AS applied_by_code
+            SELECT 
+                MIN(aj.id) AS id,
+                aj.batch_id,
+                aj.employee_id,
+                aj.request_type,
+                MIN(aj.date) AS date,
+                COALESCE(ANY_VALUE(aj.range_from_date), MIN(aj.date)) AS from_date,
+                COALESCE(ANY_VALUE(aj.range_to_date), MAX(aj.date)) AS to_date,
+                COUNT(*) AS total_days,
+                COALESCE(ANY_VALUE(aj.range_calendar_days), DATEDIFF(MAX(aj.date), MIN(aj.date)) + 1) AS calendar_days,
+                ANY_VALUE(aj.range_skipped_summary) AS range_skipped_summary,
+                MIN(aj.requested_in_time) AS requested_in_time,
+                MAX(aj.requested_out_time) AS requested_out_time,
+                ANY_VALUE(aj.regularization_shift_type) AS regularization_shift_type,
+                ANY_VALUE(aj.reason) AS reason,
+                ANY_VALUE(aj.status) AS status,
+                MIN(aj.created_on) AS created_on,
+                ANY_VALUE(aj.approved_by) AS approved_by,
+                ANY_VALUE(aj.approved_on) AS approved_on,
+                ANY_VALUE(aj.substitute_employee_id) AS substitute_employee_id,
+                ANY_VALUE(aj.approver_1_id) AS approver_1_id,
+                ANY_VALUE(aj.approver_2_id) AS approver_2_id,
+                ANY_VALUE(aj.current_level) AS current_level,
+                ANY_VALUE(aj.approver_1_remarks) AS approver_1_remarks,
+                ANY_VALUE(aj.approver_1_action_on) AS approver_1_action_on,
+                ANY_VALUE(aj.approver_2_remarks) AS approver_2_remarks,
+                ANY_VALUE(aj.approver_2_action_on) AS approver_2_action_on,
+                ANY_VALUE(aj.applied_by_id) AS applied_by_id,
+                ANY_VALUE(aj.is_proxy) AS is_proxy,
+                ANY_VALUE(e.employee_name) AS approver_name,
+                ANY_VALUE(ea1.employee_name) AS approver_1_name,
+                ANY_VALUE(ea1.employee_code) AS approver_1_code,
+                ANY_VALUE(ea2.employee_name) AS approver_2_name,
+                ANY_VALUE(ea2.employee_code) AS approver_2_code,
+                MIN(ad.first_in_time) AS actual_in_time,
+                MAX(ad.last_out_time) AS actual_out_time,
+                GROUP_CONCAT(DISTINCT ad.status SEPARATOR ' / ') AS actual_status,
+                ANY_VALUE(sub.employee_name) AS substitute_name,
+                ANY_VALUE(sub.employee_code) AS substitute_code,
+                ANY_VALUE(ap_proxy.employee_name) AS applied_by_name,
+                ANY_VALUE(ap_proxy.employee_code) AS applied_by_code
             FROM attendance_regularization aj 
             LEFT JOIN employee e ON aj.approved_by = e.employee_id 
             LEFT JOIN employee ea1 ON ea1.employee_id = aj.approver_1_id
@@ -540,18 +829,15 @@ class AttendanceModel {
             params.push(year);
         }
 
-        query += " ORDER BY aj.created_on DESC";
+        query += " GROUP BY aj.batch_id, aj.employee_id, aj.request_type ORDER BY MIN(aj.created_on) DESC";
 
         const [rows] = await pool.execute(query, params);
         return rows;
     }
 
-    // Get a specific adjustment by ID
-    static async getEmployeeAdjustmentsById(id) {
-        const [rows] = await pool.execute(
-            `SELECT * FROM attendance_regularization WHERE id = ?`,
-            [id]
-        );
+    // Get a specific adjustment by ID or batch_id
+    static async getEmployeeAdjustmentsById(identifier) {
+        const { rows } = await this._resolveBatchRows(pool, identifier);
         return rows;
     }
 
@@ -595,9 +881,9 @@ class AttendanceModel {
     }
 
     /**
-     * Paginated approval queue — supports status filter.
+     * Paginated approval queue — supports status filter and aggregates batches into single cards.
      * isAdmin = true  → all records
-     * isAdmin = false → manager sees own subordinate records
+     * isAdmin = false → manager sees active designated approvals (when Pending) or subordinates/assigned (when not Pending)
      */
     static async getApprovalQueue({ isAdmin, managerId, status = 'Pending', page = 1, limit = 10 }) {
         const offset = (page - 1) * limit;
@@ -607,21 +893,51 @@ class AttendanceModel {
 
         if (isAdmin) {
             dataQuery = `
-                SELECT aj.*, e.employee_name, e.employee_code,
-                       d.departmentname AS department_name,
-                       des.designation AS employee_designation,
-                       ap.employee_name AS approver_name,
-                       ea1.employee_name AS approver_1_name,
-                       ea1.employee_code AS approver_1_code,
-                       ea2.employee_name AS approver_2_name,
-                       ea2.employee_code AS approver_2_code,
-                       ad.first_in_time AS actual_in_time,
-                       ad.last_out_time AS actual_out_time,
-                       ad.status AS actual_status,
-                       sub.employee_name AS substitute_name,
-                       sub.employee_code AS substitute_code,
-                       ap_proxy.employee_name AS applied_by_name,
-                       ap_proxy.employee_code AS applied_by_code
+                SELECT 
+                    MIN(aj.id) AS id,
+                    aj.batch_id,
+                    aj.employee_id,
+                    aj.request_type,
+                    MIN(aj.date) AS date,
+                    COALESCE(ANY_VALUE(aj.range_from_date), MIN(aj.date)) AS from_date,
+                    COALESCE(ANY_VALUE(aj.range_to_date), MAX(aj.date)) AS to_date,
+                    COUNT(*) AS total_days,
+                    COALESCE(ANY_VALUE(aj.range_calendar_days), DATEDIFF(MAX(aj.date), MIN(aj.date)) + 1) AS calendar_days,
+                    ANY_VALUE(aj.range_skipped_summary) AS range_skipped_summary,
+                    MIN(aj.requested_in_time) AS requested_in_time,
+                    MAX(aj.requested_out_time) AS requested_out_time,
+                    ANY_VALUE(aj.regularization_shift_type) AS regularization_shift_type,
+                    ANY_VALUE(aj.reason) AS reason,
+                    ANY_VALUE(aj.status) AS status,
+                    MIN(aj.created_on) AS created_on,
+                    ANY_VALUE(aj.approved_by) AS approved_by,
+                    ANY_VALUE(aj.approved_on) AS approved_on,
+                    ANY_VALUE(aj.substitute_employee_id) AS substitute_employee_id,
+                    ANY_VALUE(aj.approver_1_id) AS approver_1_id,
+                    ANY_VALUE(aj.approver_2_id) AS approver_2_id,
+                    ANY_VALUE(aj.current_level) AS current_level,
+                    ANY_VALUE(aj.approver_1_remarks) AS approver_1_remarks,
+                    ANY_VALUE(aj.approver_1_action_on) AS approver_1_action_on,
+                    ANY_VALUE(aj.approver_2_remarks) AS approver_2_remarks,
+                    ANY_VALUE(aj.approver_2_action_on) AS approver_2_action_on,
+                    ANY_VALUE(aj.applied_by_id) AS applied_by_id,
+                    ANY_VALUE(aj.is_proxy) AS is_proxy,
+                    ANY_VALUE(e.employee_name) AS employee_name,
+                    ANY_VALUE(e.employee_code) AS employee_code,
+                    ANY_VALUE(d.departmentname) AS department_name,
+                    ANY_VALUE(des.designation) AS employee_designation,
+                    ANY_VALUE(ap.employee_name) AS approver_name,
+                    ANY_VALUE(ea1.employee_name) AS approver_1_name,
+                    ANY_VALUE(ea1.employee_code) AS approver_1_code,
+                    ANY_VALUE(ea2.employee_name) AS approver_2_name,
+                    ANY_VALUE(ea2.employee_code) AS approver_2_code,
+                    ANY_VALUE(sub.employee_name) AS substitute_name,
+                    ANY_VALUE(sub.employee_code) AS substitute_code,
+                    ANY_VALUE(ap_proxy.employee_name) AS applied_by_name,
+                    ANY_VALUE(ap_proxy.employee_code) AS applied_by_code,
+                    MIN(ad.first_in_time) AS actual_in_time,
+                    MAX(ad.last_out_time) AS actual_out_time,
+                    GROUP_CONCAT(DISTINCT ad.status SEPARATOR ' / ') AS actual_status
                 FROM attendance_regularization aj
                 JOIN employee e ON aj.employee_id = e.employee_id
                 LEFT JOIN department d ON e.department_id = d.department_id
@@ -641,81 +957,202 @@ class AttendanceModel {
                 ) ad ON ad.employee_id = aj.employee_id AND ad.date = aj.date
                 WHERE 1=1
                 ${statusFilter ? 'AND aj.status = ?' : ""}
-                ORDER BY aj.created_on DESC
+                GROUP BY aj.batch_id, aj.employee_id, aj.request_type
+                ORDER BY MIN(aj.created_on) DESC
                 LIMIT ? OFFSET ?`;
+
             countQuery = `
-                SELECT COUNT(*) AS total FROM attendance_regularization aj
+                SELECT COUNT(DISTINCT aj.batch_id) AS total FROM attendance_regularization aj
                 WHERE 1=1 ${statusFilter ? 'AND aj.status = ?' : ''}`;
+
             if (statusFilter) { params.push(statusFilter); countParams.push(statusFilter); }
             params.push(parseInt(limit), parseInt(offset));
         } else {
-            const approverConditions = (statusFilter === 'Pending')
-                ? `OR (aj.current_level = 1 AND aj.approver_1_id = ?)
-                   OR (aj.current_level = 2 AND aj.approver_2_id = ?)`
-                : `OR aj.approver_1_id = ?
-                   OR aj.approver_2_id = ?`;
+            // For non-admin managers:
+            // When status is Pending: STRICTLY match the designated active approver at that level.
+            // Level 1: current_level = 1 AND approver_1_id = managerId
+            // Level 2: current_level = 2 AND approver_2_id = managerId
+            // This prevents Level 2 approvers from seeing Level 1 requests before Level 1 approves.
+            if (statusFilter === 'Pending') {
+                dataQuery = `
+                    SELECT 
+                        MIN(aj.id) AS id,
+                        aj.batch_id,
+                        aj.employee_id,
+                        aj.request_type,
+                        MIN(aj.date) AS date,
+                        COALESCE(ANY_VALUE(aj.range_from_date), MIN(aj.date)) AS from_date,
+                        COALESCE(ANY_VALUE(aj.range_to_date), MAX(aj.date)) AS to_date,
+                        COUNT(*) AS total_days,
+                        COALESCE(ANY_VALUE(aj.range_calendar_days), DATEDIFF(MAX(aj.date), MIN(aj.date)) + 1) AS calendar_days,
+                        ANY_VALUE(aj.range_skipped_summary) AS range_skipped_summary,
+                        MIN(aj.requested_in_time) AS requested_in_time,
+                        MAX(aj.requested_out_time) AS requested_out_time,
+                        ANY_VALUE(aj.regularization_shift_type) AS regularization_shift_type,
+                        ANY_VALUE(aj.reason) AS reason,
+                        ANY_VALUE(aj.status) AS status,
+                        MIN(aj.created_on) AS created_on,
+                        ANY_VALUE(aj.approved_by) AS approved_by,
+                        ANY_VALUE(aj.approved_on) AS approved_on,
+                        ANY_VALUE(aj.substitute_employee_id) AS substitute_employee_id,
+                        ANY_VALUE(aj.approver_1_id) AS approver_1_id,
+                        ANY_VALUE(aj.approver_2_id) AS approver_2_id,
+                        ANY_VALUE(aj.current_level) AS current_level,
+                        ANY_VALUE(aj.approver_1_remarks) AS approver_1_remarks,
+                        ANY_VALUE(aj.approver_1_action_on) AS approver_1_action_on,
+                        ANY_VALUE(aj.approver_2_remarks) AS approver_2_remarks,
+                        ANY_VALUE(aj.approver_2_action_on) AS approver_2_action_on,
+                        ANY_VALUE(aj.applied_by_id) AS applied_by_id,
+                        ANY_VALUE(aj.is_proxy) AS is_proxy,
+                        ANY_VALUE(e.employee_name) AS employee_name,
+                        ANY_VALUE(e.employee_code) AS employee_code,
+                        ANY_VALUE(d.departmentname) AS department_name,
+                        ANY_VALUE(des.designation) AS employee_designation,
+                        ANY_VALUE(ap.employee_name) AS approver_name,
+                        ANY_VALUE(ea1.employee_name) AS approver_1_name,
+                        ANY_VALUE(ea1.employee_code) AS approver_1_code,
+                        ANY_VALUE(ea2.employee_name) AS approver_2_name,
+                        ANY_VALUE(ea2.employee_code) AS approver_2_code,
+                        ANY_VALUE(sub.employee_name) AS substitute_name,
+                        ANY_VALUE(sub.employee_code) AS substitute_code,
+                        ANY_VALUE(ap_proxy.employee_name) AS applied_by_name,
+                        ANY_VALUE(ap_proxy.employee_code) AS applied_by_code,
+                        MIN(ad.first_in_time) AS actual_in_time,
+                        MAX(ad.last_out_time) AS actual_out_time,
+                        GROUP_CONCAT(DISTINCT ad.status SEPARATOR ' / ') AS actual_status
+                    FROM attendance_regularization aj
+                    JOIN employee e ON aj.employee_id = e.employee_id
+                    LEFT JOIN department d ON e.department_id = d.department_id
+                    LEFT JOIN designation des ON e.designation_id = des.designation_id
+                    LEFT JOIN employee ap  ON ap.employee_id  = aj.approved_by
+                    LEFT JOIN employee ea1 ON ea1.employee_id = aj.approver_1_id
+                    LEFT JOIN employee ea2 ON ea2.employee_id = aj.approver_2_id
+                    LEFT JOIN employee sub ON sub.employee_id = aj.substitute_employee_id
+                    LEFT JOIN employee ap_proxy ON ap_proxy.employee_id = aj.applied_by_id
+                    LEFT JOIN (
+                        SELECT employee_id, date, 
+                               MIN(first_in_time) AS first_in_time, 
+                               MAX(last_out_time) AS last_out_time,
+                               GROUP_CONCAT(status ORDER BY shift_type SEPARATOR ' / ') AS status
+                        FROM attendance
+                        GROUP BY employee_id, date
+                    ) ad ON ad.employee_id = aj.employee_id AND ad.date = aj.date
+                    WHERE aj.status = 'Pending'
+                      AND ((aj.current_level = 1 AND aj.approver_1_id = ?)
+                        OR (aj.current_level = 2 AND aj.approver_2_id = ?))
+                    GROUP BY aj.batch_id, aj.employee_id, aj.request_type
+                    ORDER BY MIN(aj.created_on) DESC
+                    LIMIT ? OFFSET ?`;
 
-            dataQuery = `
-                WITH RECURSIVE subordinates AS (
-                    SELECT employee_id FROM employee WHERE reporting_manager_id = ?
-                    UNION ALL
-                    SELECT e.employee_id FROM employee e
-                    INNER JOIN subordinates s ON e.reporting_manager_id = s.employee_id
-                )
-                SELECT aj.*, e.employee_name, e.employee_code,
-                       d.departmentname AS department_name,
-                       des.designation AS employee_designation,
-                       ap.employee_name AS approver_name,
-                       ea1.employee_name AS approver_1_name,
-                       ea1.employee_code AS approver_1_code,
-                       ea2.employee_name AS approver_2_name,
-                       ea2.employee_code AS approver_2_code,
-                       ad.first_in_time AS actual_in_time,
-                       ad.last_out_time AS actual_out_time,
-                       ad.status AS actual_status,
-                       sub.employee_name AS substitute_name,
-                       sub.employee_code AS substitute_code,
-                       ap_proxy.employee_name AS applied_by_name,
-                       ap_proxy.employee_code AS applied_by_code
-                FROM attendance_regularization aj
-                JOIN employee e ON aj.employee_id = e.employee_id
-                LEFT JOIN department d ON e.department_id = d.department_id
-                LEFT JOIN designation des ON e.designation_id = des.designation_id
-                LEFT JOIN employee ap  ON ap.employee_id  = aj.approved_by
-                LEFT JOIN employee ea1 ON ea1.employee_id = aj.approver_1_id
-                LEFT JOIN employee ea2 ON ea2.employee_id = aj.approver_2_id
-                LEFT JOIN employee sub ON sub.employee_id = aj.substitute_employee_id
-                LEFT JOIN employee ap_proxy ON ap_proxy.employee_id = aj.applied_by_id
-                LEFT JOIN (
-                    SELECT employee_id, date, 
-                           MIN(first_in_time) AS first_in_time, 
-                           MAX(last_out_time) AS last_out_time,
-                           GROUP_CONCAT(status ORDER BY shift_type SEPARATOR ' / ') AS status
-                    FROM attendance
-                    GROUP BY employee_id, date
-                ) ad ON ad.employee_id = aj.employee_id AND ad.date = aj.date
-                WHERE (aj.employee_id IN (SELECT employee_id FROM subordinates)
-                   ${approverConditions})
-                ${statusFilter ? 'AND aj.status = ?' : ''}
-                ORDER BY aj.created_on DESC
-                LIMIT ? OFFSET ?`;
+                countQuery = `
+                    SELECT COUNT(DISTINCT aj.batch_id) AS total FROM attendance_regularization aj
+                    WHERE aj.status = 'Pending'
+                      AND ((aj.current_level = 1 AND aj.approver_1_id = ?)
+                        OR (aj.current_level = 2 AND aj.approver_2_id = ?))`;
 
-            countQuery = `
-                WITH RECURSIVE subordinates AS (
-                    SELECT employee_id FROM employee WHERE reporting_manager_id = ?
-                    UNION ALL
-                    SELECT e.employee_id FROM employee e
-                    INNER JOIN subordinates s ON e.reporting_manager_id = s.employee_id
-                )
-                SELECT COUNT(*) AS total FROM attendance_regularization aj
-                WHERE (aj.employee_id IN (SELECT employee_id FROM subordinates)
-                   ${approverConditions})
-                ${statusFilter ? 'AND aj.status = ?' : ''}`;
+                params = [managerId, managerId, parseInt(limit), parseInt(offset)];
+                countParams = [managerId, managerId];
+            } else {
+                // When not Pending (All, Approved, Rejected):
+                // Manager can see adjustments of their subordinates OR where they acted as approver 1 or 2.
+                dataQuery = `
+                    WITH RECURSIVE subordinates AS (
+                        SELECT employee_id FROM employee WHERE reporting_manager_id = ?
+                        UNION ALL
+                        SELECT e.employee_id FROM employee e
+                        INNER JOIN subordinates s ON e.reporting_manager_id = s.employee_id
+                    )
+                    SELECT 
+                        MIN(aj.id) AS id,
+                        aj.batch_id,
+                        aj.employee_id,
+                        aj.request_type,
+                        MIN(aj.date) AS date,
+                        COALESCE(ANY_VALUE(aj.range_from_date), MIN(aj.date)) AS from_date,
+                        COALESCE(ANY_VALUE(aj.range_to_date), MAX(aj.date)) AS to_date,
+                        COUNT(*) AS total_days,
+                        COALESCE(ANY_VALUE(aj.range_calendar_days), DATEDIFF(MAX(aj.date), MIN(aj.date)) + 1) AS calendar_days,
+                        ANY_VALUE(aj.range_skipped_summary) AS range_skipped_summary,
+                        MIN(aj.requested_in_time) AS requested_in_time,
+                        MAX(aj.requested_out_time) AS requested_out_time,
+                        ANY_VALUE(aj.regularization_shift_type) AS regularization_shift_type,
+                        ANY_VALUE(aj.reason) AS reason,
+                        ANY_VALUE(aj.status) AS status,
+                        MIN(aj.created_on) AS created_on,
+                        ANY_VALUE(aj.approved_by) AS approved_by,
+                        ANY_VALUE(aj.approved_on) AS approved_on,
+                        ANY_VALUE(aj.substitute_employee_id) AS substitute_employee_id,
+                        ANY_VALUE(aj.approver_1_id) AS approver_1_id,
+                        ANY_VALUE(aj.approver_2_id) AS approver_2_id,
+                        ANY_VALUE(aj.current_level) AS current_level,
+                        ANY_VALUE(aj.approver_1_remarks) AS approver_1_remarks,
+                        ANY_VALUE(aj.approver_1_action_on) AS approver_1_action_on,
+                        ANY_VALUE(aj.approver_2_remarks) AS approver_2_remarks,
+                        ANY_VALUE(aj.approver_2_action_on) AS approver_2_action_on,
+                        ANY_VALUE(aj.applied_by_id) AS applied_by_id,
+                        ANY_VALUE(aj.is_proxy) AS is_proxy,
+                        ANY_VALUE(e.employee_name) AS employee_name,
+                        ANY_VALUE(e.employee_code) AS employee_code,
+                        ANY_VALUE(d.departmentname) AS department_name,
+                        ANY_VALUE(des.designation) AS employee_designation,
+                        ANY_VALUE(ap.employee_name) AS approver_name,
+                        ANY_VALUE(ea1.employee_name) AS approver_1_name,
+                        ANY_VALUE(ea1.employee_code) AS approver_1_code,
+                        ANY_VALUE(ea2.employee_name) AS approver_2_name,
+                        ANY_VALUE(ea2.employee_code) AS approver_2_code,
+                        ANY_VALUE(sub.employee_name) AS substitute_name,
+                        ANY_VALUE(sub.employee_code) AS substitute_code,
+                        ANY_VALUE(ap_proxy.employee_name) AS applied_by_name,
+                        ANY_VALUE(ap_proxy.employee_code) AS applied_by_code,
+                        MIN(ad.first_in_time) AS actual_in_time,
+                        MAX(ad.last_out_time) AS actual_out_time,
+                        GROUP_CONCAT(DISTINCT ad.status SEPARATOR ' / ') AS actual_status
+                    FROM attendance_regularization aj
+                    JOIN employee e ON aj.employee_id = e.employee_id
+                    LEFT JOIN department d ON e.department_id = d.department_id
+                    LEFT JOIN designation des ON e.designation_id = des.designation_id
+                    LEFT JOIN employee ap  ON ap.employee_id  = aj.approved_by
+                    LEFT JOIN employee ea1 ON ea1.employee_id = aj.approver_1_id
+                    LEFT JOIN employee ea2 ON ea2.employee_id = aj.approver_2_id
+                    LEFT JOIN employee sub ON sub.employee_id = aj.substitute_employee_id
+                    LEFT JOIN employee ap_proxy ON ap_proxy.employee_id = aj.applied_by_id
+                    LEFT JOIN (
+                        SELECT employee_id, date, 
+                               MIN(first_in_time) AS first_in_time, 
+                               MAX(last_out_time) AS last_out_time,
+                               GROUP_CONCAT(status ORDER BY shift_type SEPARATOR ' / ') AS status
+                        FROM attendance
+                        GROUP BY employee_id, date
+                    ) ad ON ad.employee_id = aj.employee_id AND ad.date = aj.date
+                    WHERE (aj.employee_id IN (SELECT employee_id FROM subordinates)
+                       OR aj.approver_1_id = ?
+                       OR aj.approver_2_id = ?)
+                    ${statusFilter ? 'AND aj.status = ?' : ''}
+                    GROUP BY aj.batch_id, aj.employee_id, aj.request_type
+                    ORDER BY MIN(aj.created_on) DESC
+                    LIMIT ? OFFSET ?`;
 
-            params.push(managerId, managerId, managerId);
-            countParams.push(managerId, managerId, managerId);
-            if (statusFilter) { params.push(statusFilter); countParams.push(statusFilter); }
-            params.push(parseInt(limit), parseInt(offset));
+                countQuery = `
+                    WITH RECURSIVE subordinates AS (
+                        SELECT employee_id FROM employee WHERE reporting_manager_id = ?
+                        UNION ALL
+                        SELECT e.employee_id FROM employee e
+                        INNER JOIN subordinates s ON e.reporting_manager_id = s.employee_id
+                    )
+                    SELECT COUNT(DISTINCT aj.batch_id) AS total FROM attendance_regularization aj
+                    WHERE (aj.employee_id IN (SELECT employee_id FROM subordinates)
+                       OR aj.approver_1_id = ?
+                       OR aj.approver_2_id = ?)
+                    ${statusFilter ? 'AND aj.status = ?' : ''}`;
+
+                params = [managerId, managerId, managerId];
+                countParams = [managerId, managerId, managerId];
+                if (statusFilter) {
+                    params.push(statusFilter);
+                    countParams.push(statusFilter);
+                }
+                params.push(parseInt(limit), parseInt(offset));
+            }
         }
 
         const [rows] = await pool.query(dataQuery, params);
@@ -903,11 +1340,12 @@ class AttendanceModel {
         try {
             await conn.beginTransaction();
 
+            const batchId = crypto.randomUUID();
             const [result] = await conn.execute(
                 `INSERT INTO attendance_regularization 
-                (employee_id, request_type, date, requested_in_time, requested_out_time, regularization_shift_type, reason, status, created_on) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'Pending', NOW())`,
-                [employee_id, type, targetDate, requested_in_time || null, requested_out_time || null, requestedShift, reason]
+                (batch_id, employee_id, request_type, date, requested_in_time, requested_out_time, regularization_shift_type, reason, status, created_on) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Pending', NOW())`,
+                [batchId, employee_id, type, targetDate, requested_in_time || null, requested_out_time || null, requestedShift, reason]
             );
 
             const adjustmentId = result.insertId;
@@ -916,7 +1354,7 @@ class AttendanceModel {
 
             const approveRes = await this.approveAdjustment(adjustmentId, approverId, 'Super Admin Direct Bypass Approval');
 
-            return { success: true, adjustment_id: adjustmentId, ...approveRes };
+            return { success: true, adjustment_id: adjustmentId, batch_id: batchId, ...approveRes };
         } catch (err) {
             await conn.rollback();
             throw err;
