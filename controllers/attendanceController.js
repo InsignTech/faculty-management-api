@@ -215,7 +215,37 @@ const requestAdjustment = async (req, res, next) => {
             is_proxy: isProxy
         });
 
-        sendResponse(res, 201, 'Adjustment request submitted successfully', result);
+        let successMessage = 'Adjustment request submitted successfully';
+        if (result.range_analysis && result.range_analysis.skipped && result.range_analysis.skipped.total_skipped > 0) {
+            successMessage = `On-Duty request submitted for ${result.count} working day(s). (${result.range_analysis.skipped.total_skipped} non-working / leave days excluded).`;
+        }
+
+        sendResponse(res, 201, successMessage, result);
+    } catch (error) { next(error); }
+};
+
+const previewAdjustmentRange = async (req, res, next) => {
+    try {
+        const { type = 'OnDuty', from_date, to_date, employee_id, regularization_shift_type } = req.query;
+        let targetEmployeeId = employee_id || req.user.employeeId;
+
+        if (!targetEmployeeId) {
+            return next(new ErrorResponse('User is not associated with an employee record', 400));
+        }
+
+        if (!from_date || !to_date) {
+            return next(new ErrorResponse('from_date and to_date are required for range preview', 400));
+        }
+
+        const preview = await AttendanceModel.validateAndFilterRangeDates({
+            employee_id: parseInt(targetEmployeeId),
+            type,
+            from_date,
+            to_date,
+            shift_type: regularization_shift_type || 'FullDay'
+        });
+
+        sendResponse(res, 200, 'Range preview calculated successfully', preview);
     } catch (error) { next(error); }
 };
 
@@ -292,7 +322,7 @@ const approveAdjustment = async (req, res, next) => {
 
         // Permission check
         const userRole = req.user.role?.toLowerCase();
-        const isAdmin = ['super_admin'].includes(userRole);
+        const isAdmin = ['super_admin', 'admin', 'principal'].includes(userRole);
 
         if (!isAdmin) {
             const isDesignatedApprover = adj.approver_1_id === approverId || adj.approver_2_id === approverId;
@@ -304,8 +334,40 @@ const approveAdjustment = async (req, res, next) => {
             }
         }
 
-        const result = await AttendanceModel.approveAdjustment(id, approverId, remarks, subId);
-        sendResponse(res, 200, 'Adjustment approved', result);
+        const result = await AttendanceModel.approveBatchAdjustment(adj.batch_id || id, approverId, remarks, subId);
+        sendResponse(res, 200, result.message || 'Adjustment approved', result);
+    } catch (error) { next(error); }
+};
+
+const approveBatchAdjustment = async (req, res, next) => {
+    try {
+        const { batchId } = req.params;
+        const approverId = req.user.employeeId;
+        const { remarks, substituteEmployeeId, substitute_employee_id } = req.body;
+        const subId = substituteEmployeeId || substitute_employee_id || null;
+
+        if (!approverId) return next(new ErrorResponse('User is not associated with an employee record', 400));
+
+        // Get request details to check owner
+        const [adj] = await AttendanceModel.getEmployeeAdjustmentsById(batchId);
+        if (!adj) return next(new ErrorResponse('Adjustment request not found', 404));
+
+        // Permission check
+        const userRole = req.user.role?.toLowerCase();
+        const isAdmin = ['super_admin', 'admin', 'principal'].includes(userRole);
+
+        if (!isAdmin) {
+            const isDesignatedApprover = adj.approver_1_id === approverId || adj.approver_2_id === approverId;
+            if (!isDesignatedApprover) {
+                const isSub = await EmployeeModel.isSubordinate(approverId, adj.employee_id);
+                if (!isSub) {
+                    return next(new ErrorResponse('You are not authorized to approve this request', 403));
+                }
+            }
+        }
+
+        const result = await AttendanceModel.approveBatchAdjustment(batchId, approverId, remarks, subId);
+        sendResponse(res, 200, result.message || 'Adjustment approved', result);
     } catch (error) { next(error); }
 };
 
@@ -324,7 +386,7 @@ const rejectAdjustment = async (req, res, next) => {
 
         // Permission check
         const userRole = req.user.role?.toLowerCase();
-        const isAdmin = ['super_admin'].includes(userRole);
+        const isAdmin = ['super_admin', 'admin', 'principal'].includes(userRole);
 
         if (!isAdmin) {
             const isDesignatedApprover = adj.approver_1_id === approverId || adj.approver_2_id === approverId;
@@ -336,7 +398,39 @@ const rejectAdjustment = async (req, res, next) => {
             }
         }
 
-        const result = await AttendanceModel.rejectAdjustment(id, approverId, remarks);
+        const result = await AttendanceModel.rejectBatchAdjustment(adj.batch_id || id, approverId, remarks);
+        sendResponse(res, 200, 'Adjustment rejected', result);
+    } catch (error) { next(error); }
+};
+
+const rejectBatchAdjustment = async (req, res, next) => {
+    try {
+        const { batchId } = req.params;
+        const approverId = req.user.employeeId;
+        const { remarks } = req.body;
+
+        if (!approverId) return next(new ErrorResponse('User is not associated with an employee record', 400));
+        if (!remarks) return next(new ErrorResponse('Please provide a reason for rejection', 400));
+
+        // Get request details to check owner
+        const [adj] = await AttendanceModel.getEmployeeAdjustmentsById(batchId);
+        if (!adj) return next(new ErrorResponse('Adjustment request not found', 404));
+
+        // Permission check
+        const userRole = req.user.role?.toLowerCase();
+        const isAdmin = ['super_admin', 'admin', 'principal'].includes(userRole);
+
+        if (!isAdmin) {
+            const isDesignatedApprover = adj.approver_1_id === approverId || adj.approver_2_id === approverId;
+            if (!isDesignatedApprover) {
+                const isSub = await EmployeeModel.isSubordinate(approverId, adj.employee_id);
+                if (!isSub) {
+                    return next(new ErrorResponse('You are not authorized to reject this request', 403));
+                }
+            }
+        }
+
+        const result = await AttendanceModel.rejectBatchAdjustment(batchId, approverId, remarks);
         sendResponse(res, 200, 'Adjustment rejected', result);
     } catch (error) { next(error); }
 };
@@ -345,7 +439,21 @@ const deleteAdjustment = async (req, res, next) => {
     try {
         const { id } = req.params;
         const employeeId = req.user.employeeId;
-        const result = await AttendanceModel.deleteAdjustment(id, employeeId);
+        const result = await AttendanceModel.deleteBatchAdjustment(id, employeeId);
+
+        if (result.affected_rows === 0) {
+            return next(new ErrorResponse('Adjustment not found or is already processed', 404));
+        }
+
+        sendResponse(res, 200, 'Adjustment request deleted successfully', result);
+    } catch (error) { next(error); }
+};
+
+const deleteBatchAdjustment = async (req, res, next) => {
+    try {
+        const { batchId } = req.params;
+        const employeeId = req.user.employeeId;
+        const result = await AttendanceModel.deleteBatchAdjustment(batchId, employeeId);
 
         if (result.affected_rows === 0) {
             return next(new ErrorResponse('Adjustment not found or is already processed', 404));
@@ -480,10 +588,14 @@ module.exports = {
     getMyAdjustments,
     getPendingAdjustments,
     approveAdjustment,
+    approveBatchAdjustment,
     rejectAdjustment,
+    rejectBatchAdjustment,
     deleteAdjustment,
+    deleteBatchAdjustment,
     uploadMachineLogs,
     superAdminUpdateAttendance,
     superAdminApplyAdjustment,
-    uploadMachineLogsMesEdathala
+    uploadMachineLogsMesEdathala,
+    previewAdjustmentRange
 };
