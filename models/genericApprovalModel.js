@@ -43,9 +43,15 @@ class GenericApprovalModel {
     static async getPendingForApprover(approverId) {
         const query = `
             SELECT ga.*,
-                   req.employee_name AS requester_name
+                   req.employee_name AS requester_name,
+                   a1.employee_name AS approver_1_name,
+                   a2.employee_name AS approver_2_name,
+                   act.employee_name AS actioned_by_name
             FROM generic_approvals ga
             LEFT JOIN employee req ON ga.requester_id = req.employee_id
+            LEFT JOIN employee a1 ON ga.approver_1_id = a1.employee_id
+            LEFT JOIN employee a2 ON ga.approver_2_id = a2.employee_id
+            LEFT JOIN employee act ON ga.actioned_by_id = act.employee_id
             WHERE ga.status = 'Pending'
               AND (
                 (ga.current_level = 1 AND ga.approver_1_id = ?)
@@ -60,9 +66,15 @@ class GenericApprovalModel {
     static async getApprovalsHistory(employeeId) {
         const query = `
             SELECT ga.*,
-                   req.employee_name AS requester_name
+                   req.employee_name AS requester_name,
+                   a1.employee_name AS approver_1_name,
+                   a2.employee_name AS approver_2_name,
+                   act.employee_name AS actioned_by_name
             FROM generic_approvals ga
             LEFT JOIN employee req ON ga.requester_id = req.employee_id
+            LEFT JOIN employee a1 ON ga.approver_1_id = a1.employee_id
+            LEFT JOIN employee a2 ON ga.approver_2_id = a2.employee_id
+            LEFT JOIN employee act ON ga.actioned_by_id = act.employee_id
             WHERE ga.requester_id = ? OR ga.approver_1_id = ? OR ga.approver_2_id = ?
             ORDER BY ga.requested_on DESC
         `;

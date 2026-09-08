@@ -12,6 +12,7 @@ router.get('/operations', genericApprovalController.getPendingApprovals);
 router.get('/operations/my-requests', genericApprovalController.getMyRequests);
 router.get('/operations/history', genericApprovalController.getApprovalsHistory);
 router.post('/operations/:id/action', genericApprovalController.actionApproval);
+router.post('/operations/:id/cancel', genericApprovalController.cancelRequest);
 router.get('/check-access', genericApprovalController.checkAccess);
 
 // Configurations endpoints (Restricted to Super Admin/Principal)
