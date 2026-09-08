@@ -33,9 +33,7 @@ async function interceptApproval({
 }) {
     // 0. Super Admin check: Super admin does NOT need any approvals - changes go directly
     const roleName = (requesterRole || user?.role || '').toLowerCase().trim();
-    let isSuperAdmin = ['super_admin', 'superadmin', 'super admin'].includes(roleName) || 
-                       user?.roleId === 1 || 
-                       user?.role_id === 1;
+    let isSuperAdmin = ['super_admin', 'superadmin', 'super admin'].includes(roleName);
 
     if (!isSuperAdmin && (requesterId || user?.id)) {
         try {
@@ -138,9 +136,9 @@ async function interceptApproval({
         }
     }
 
-    if (entityId && actionType === 'UPDATE') {
+    if (entityId && (actionType === 'UPDATE' || actionType === 'DELETE')) {
         const duplicate = pendingRequests.find(r => {
-            const matchesEntity = r.entity_id && parseInt(r.entity_id) === parseInt(entityId) && r.action_type === 'UPDATE';
+            const matchesEntity = r.entity_id && parseInt(r.entity_id) === parseInt(entityId);
             if (!matchesEntity) return false;
 
             if (requestType === 'APPROVER_CONFIG') {
@@ -155,19 +153,16 @@ async function interceptApproval({
         });
 
         if (duplicate) {
-            const subMessage = requestType === 'APPROVER_CONFIG' ? ` for ${requestedData.request_type}` : '';
-            throw new ErrorResponse(`There is already a pending update request for this entity${subMessage} (REQ-${duplicate.id}). Please wait until it is actioned.`, 409, 'PENDING_APPROVAL_CONFLICT');
+            const subMessage = requestType === 'APPROVER_CONFIG' ? ` for ${requestedData?.request_type || ''}` : '';
+            const typeLabel = requestType.toLowerCase().replace('_', ' ');
+            throw new ErrorResponse(
+                `There is already a pending approval request${subMessage} (REQ-${duplicate.id}) for this ${typeLabel}. Please wait until it is actioned, or cancel your pending request in "My Submissions" under Operation Approvals to make new changes.`,
+                409,
+                'PENDING_APPROVAL_CONFLICT'
+            );
         }
     }
 
-    if (entityId && actionType === 'DELETE') {
-        const duplicate = pendingRequests.find(r => 
-            r.entity_id && parseInt(r.entity_id) === parseInt(entityId) && r.action_type === 'DELETE'
-        );
-        if (duplicate) {
-            throw new ErrorResponse(`There is already a pending deletion request for this entity (REQ-${duplicate.id}).`, 409, 'PENDING_APPROVAL_CONFLICT');
-        }
-    }
 
     // 1. Fetch config
     const configRequestType = requestType === 'LEAVE_POLICY' ? 'LEAVE' : requestType;
