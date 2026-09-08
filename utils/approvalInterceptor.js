@@ -33,9 +33,7 @@ async function interceptApproval({
 }) {
     // 0. Super Admin check: Super admin does NOT need any approvals - changes go directly
     const roleName = (requesterRole || user?.role || '').toLowerCase().trim();
-    let isSuperAdmin = ['super_admin', 'superadmin', 'super admin'].includes(roleName) || 
-                       user?.roleId === 1 || 
-                       user?.role_id === 1;
+    let isSuperAdmin = ['super_admin', 'superadmin', 'super admin'].includes(roleName);
 
     if (!isSuperAdmin && (requesterId || user?.id)) {
         try {

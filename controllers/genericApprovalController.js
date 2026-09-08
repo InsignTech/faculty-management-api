@@ -13,8 +13,8 @@ const ErrorResponse = require('../utils/errorResponse');
 const getPendingApprovals = async (req, res, next) => {
     try {
         const loggedInEmpId = req.user.employeeId || req.user.employee_id;
-        const role = (req.user.role || '').toLowerCase();
-        const isSuperAdmin = ['super_admin', 'superadmin', 'super admin'].includes(role) || req.user.roleId === 1;
+        const role = (req.user.role || '').toLowerCase().trim();
+        const isSuperAdmin = ['super_admin', 'superadmin', 'super admin'].includes(role);
 
         if (!loggedInEmpId && !isSuperAdmin) {
             return next(new ErrorResponse('Employee ID not found in token', 400));
@@ -47,8 +47,8 @@ const getPendingApprovals = async (req, res, next) => {
 const getApprovalsHistory = async (req, res, next) => {
     try {
         const loggedInEmpId = req.user.employeeId || req.user.employee_id;
-        const role = (req.user.role || '').toLowerCase();
-        const isSuperAdmin = ['super_admin', 'superadmin', 'super admin'].includes(role) || req.user.roleId === 1;
+        const role = (req.user.role || '').toLowerCase().trim();
+        const isSuperAdmin = ['super_admin', 'superadmin', 'super admin'].includes(role);
 
         if (!loggedInEmpId && !isSuperAdmin) {
             return next(new ErrorResponse('Employee ID not found in token', 400));
@@ -100,12 +100,12 @@ const actionApproval = async (req, res, next) => {
         }
 
         // Verify authorization: only the designated approver for current level or Super Admin
-        const isApprover1 = approvalRequest.current_level === 1 && approvalRequest.approver_1_id === loggedInEmpId;
-        const isApprover2 = approvalRequest.current_level === 2 && approvalRequest.approver_2_id === loggedInEmpId;
-        const isSuperAdmin = ['super_admin', 'superadmin', 'super admin'].includes(req.user.role?.toLowerCase()) || req.user.roleId === 1;
+        const isApprover1 = approvalRequest.current_level === 1 && parseInt(approvalRequest.approver_1_id) === parseInt(loggedInEmpId);
+        const isApprover2 = approvalRequest.current_level === 2 && parseInt(approvalRequest.approver_2_id) === parseInt(loggedInEmpId);
+        const isSuperAdmin = ['super_admin', 'superadmin', 'super admin'].includes((req.user.role || '').toLowerCase().trim());
 
         if (!isApprover1 && !isApprover2 && !isSuperAdmin) {
-            return next(new ErrorResponse('You are not authorized to action this request', 403));
+            return next(new ErrorResponse('You are not authorized to action this request as you are not the designated approver for this level', 403));
         }
 
         if (status === 'Rejected') {
@@ -215,8 +215,8 @@ const actionApproval = async (req, res, next) => {
 const checkAccess = async (req, res, next) => {
     try {
         const loggedInEmpId = req.user.employeeId || req.user.employee_id;
-        const role = (req.user.role || '').toLowerCase();
-        const isSuperAdmin = ['super_admin', 'superadmin', 'super admin'].includes(role) || req.user.roleId === 1;
+        const role = (req.user.role || '').toLowerCase().trim();
+        const isSuperAdmin = ['super_admin', 'superadmin', 'super admin'].includes(role);
 
         if (!loggedInEmpId && !isSuperAdmin) {
             return sendResponse(res, 200, 'Access checked', { hasAccess: false, isApprover: false });
@@ -260,8 +260,8 @@ const cancelRequest = async (req, res, next) => {
     try {
         const { id } = req.params;
         const loggedInEmpId = req.user.employeeId || req.user.employee_id;
-        const role = (req.user.role || '').toLowerCase();
-        const isSuperAdmin = ['super_admin', 'superadmin', 'super admin'].includes(role) || req.user.roleId === 1;
+        const role = (req.user.role || '').toLowerCase().trim();
+        const isSuperAdmin = ['super_admin', 'superadmin', 'super admin'].includes(role);
 
         const approvalRequest = await GenericApprovalModel.getById(id);
         if (!approvalRequest) {
