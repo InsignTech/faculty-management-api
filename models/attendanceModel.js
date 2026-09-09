@@ -371,9 +371,9 @@ class AttendanceModel {
             for (const d of rangeAnalysis.applicable_dates) {
                 await conn.execute(
                     `INSERT INTO attendance_regularization 
-                    (batch_id, employee_id, request_type, date, requested_in_time, requested_out_time, regularization_shift_type, reason, status, created_on, substitute_employee_id, approver_1_id, approver_2_id, applied_by_id, is_proxy, range_from_date, range_to_date, range_calendar_days, range_skipped_summary) 
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Pending', NOW(), ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                    [batchId, employee_id, type, d, requested_in_time || null, requested_out_time || null, shiftType, reason, substitute_employee_id || null, approver1, approver2, data.applied_by_id || null, data.is_proxy || 0, from_date, to_date, rangeAnalysis.total_calendar_days, skippedSummaryJson]
+                    (batch_id, employee_id, request_type, date, requested_in_time, requested_out_time, regularization_shift_type, reason, status, created_on, substitute_employee_id, approver_1_id, approver_2_id, applied_by_id, is_proxy) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Pending', NOW(), ?, ?, ?, ?, ?)`,
+                    [batchId, employee_id, type, d, requested_in_time || null, requested_out_time || null, shiftType, reason, substitute_employee_id || null, approver1, approver2, data.applied_by_id || null, data.is_proxy || 0]
                 );
             }
 
@@ -767,11 +767,11 @@ class AttendanceModel {
                 aj.employee_id,
                 aj.request_type,
                 MIN(aj.date) AS date,
-                COALESCE(ANY_VALUE(aj.range_from_date), MIN(aj.date)) AS from_date,
-                COALESCE(ANY_VALUE(aj.range_to_date), MAX(aj.date)) AS to_date,
+                MIN(aj.date) AS from_date,
+                MAX(aj.date) AS to_date,
                 COUNT(*) AS total_days,
-                COALESCE(ANY_VALUE(aj.range_calendar_days), DATEDIFF(MAX(aj.date), MIN(aj.date)) + 1) AS calendar_days,
-                ANY_VALUE(aj.range_skipped_summary) AS range_skipped_summary,
+                (DATEDIFF(MAX(aj.date), MIN(aj.date)) + 1) AS calendar_days,
+                NULL AS range_skipped_summary,
                 MIN(aj.requested_in_time) AS requested_in_time,
                 MAX(aj.requested_out_time) AS requested_out_time,
                 ANY_VALUE(aj.regularization_shift_type) AS regularization_shift_type,
@@ -899,11 +899,11 @@ class AttendanceModel {
                     aj.employee_id,
                     aj.request_type,
                     MIN(aj.date) AS date,
-                    COALESCE(ANY_VALUE(aj.range_from_date), MIN(aj.date)) AS from_date,
-                    COALESCE(ANY_VALUE(aj.range_to_date), MAX(aj.date)) AS to_date,
+                    MIN(aj.date) AS from_date,
+                    MAX(aj.date) AS to_date,
                     COUNT(*) AS total_days,
-                    COALESCE(ANY_VALUE(aj.range_calendar_days), DATEDIFF(MAX(aj.date), MIN(aj.date)) + 1) AS calendar_days,
-                    ANY_VALUE(aj.range_skipped_summary) AS range_skipped_summary,
+                    (DATEDIFF(MAX(aj.date), MIN(aj.date)) + 1) AS calendar_days,
+                    NULL AS range_skipped_summary,
                     MIN(aj.requested_in_time) AS requested_in_time,
                     MAX(aj.requested_out_time) AS requested_out_time,
                     ANY_VALUE(aj.regularization_shift_type) AS regularization_shift_type,
@@ -981,11 +981,11 @@ class AttendanceModel {
                         aj.employee_id,
                         aj.request_type,
                         MIN(aj.date) AS date,
-                        COALESCE(ANY_VALUE(aj.range_from_date), MIN(aj.date)) AS from_date,
-                        COALESCE(ANY_VALUE(aj.range_to_date), MAX(aj.date)) AS to_date,
+                        MIN(aj.date) AS from_date,
+                        MAX(aj.date) AS to_date,
                         COUNT(*) AS total_days,
-                        COALESCE(ANY_VALUE(aj.range_calendar_days), DATEDIFF(MAX(aj.date), MIN(aj.date)) + 1) AS calendar_days,
-                        ANY_VALUE(aj.range_skipped_summary) AS range_skipped_summary,
+                        (DATEDIFF(MAX(aj.date), MIN(aj.date)) + 1) AS calendar_days,
+                        NULL AS range_skipped_summary,
                         MIN(aj.requested_in_time) AS requested_in_time,
                         MAX(aj.requested_out_time) AS requested_out_time,
                         ANY_VALUE(aj.regularization_shift_type) AS regularization_shift_type,
@@ -1068,11 +1068,11 @@ class AttendanceModel {
                         aj.employee_id,
                         aj.request_type,
                         MIN(aj.date) AS date,
-                        COALESCE(ANY_VALUE(aj.range_from_date), MIN(aj.date)) AS from_date,
-                        COALESCE(ANY_VALUE(aj.range_to_date), MAX(aj.date)) AS to_date,
+                        MIN(aj.date) AS from_date,
+                        MAX(aj.date) AS to_date,
                         COUNT(*) AS total_days,
-                        COALESCE(ANY_VALUE(aj.range_calendar_days), DATEDIFF(MAX(aj.date), MIN(aj.date)) + 1) AS calendar_days,
-                        ANY_VALUE(aj.range_skipped_summary) AS range_skipped_summary,
+                        (DATEDIFF(MAX(aj.date), MIN(aj.date)) + 1) AS calendar_days,
+                        NULL AS range_skipped_summary,
                         MIN(aj.requested_in_time) AS requested_in_time,
                         MAX(aj.requested_out_time) AS requested_out_time,
                         ANY_VALUE(aj.regularization_shift_type) AS regularization_shift_type,
