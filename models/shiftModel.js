@@ -46,8 +46,8 @@ class ShiftModel {
     }
 
     if (search) {
-      baseQuery += ` AND (e.employee_name LIKE ? OR e.employee_code LIKE ?) `;
-      params.push(`%${search}%`, `%${search}%`);
+      baseQuery += ' AND (e.employee_name LIKE ? OR e.employee_code LIKE ? OR TRIM(CONCAT(COALESCE(e.title, ""), " ", e.employee_name)) LIKE ?) ';
+      params.push(`%${search}%`, `%${search}%`, `%${search}%`);
     }
 
     // Get total count of shifts (rows)
@@ -104,6 +104,45 @@ class ShiftModel {
       [start_time, end_time, start_grace_mins, end_grace_mins, modified_by, shiftId]
     );
     return result.affectedRows > 0;
+  }
+
+  // Resolve employees (from ID or role_id) and assign shifts in bulk
+  static async assignShiftRequest(data) {
+    const { employee_id, role_id, from_date, to_date, shifts, modified_by } = data;
+    
+    let targetEmployeeIds = [];
+    if (employee_id) {
+      targetEmployeeIds.push(employee_id);
+    } else if (role_id) {
+      const roleIds = Array.isArray(role_id) ? role_id : [role_id];
+      const activeRoleIds = roleIds.filter(id => id && id !== 'all');
+      
+      if (activeRoleIds.length > 0) {
+        const [rows] = await pool.query('SELECT employee_id FROM employee WHERE role_id IN (?) AND active = 1', [activeRoleIds]);
+        targetEmployeeIds = rows.map(r => r.employee_id);
+      }
+    }
+
+    const results = [];
+    for (const emp_id of targetEmployeeIds) {
+      try {
+        await this.assignEmployeeShifts(
+          emp_id,
+          from_date,
+          to_date,
+          shifts,
+          modified_by || 'admin'
+        );
+        results.push({ employee_id: emp_id, success: true });
+      } catch (error) {
+        if (error.message && error.message.includes('overlaps')) {
+          results.push({ employee_id: emp_id, success: false, reason: 'Overlap error' });
+        } else {
+          throw error;
+        }
+      }
+    }
+    return results;
   }
 
   // Bulk create 3 mandatory shifts for an employee

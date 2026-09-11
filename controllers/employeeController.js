@@ -53,6 +53,8 @@ const createEmployee = async (req, res, next) => {
       requestedData: req.body,
       originalData: null,
       requesterId,
+      requesterRole: req.user?.role,
+      user: req.user,
       executeCallback: execute
     });
 
@@ -164,6 +166,8 @@ const updateEmployee = async (req, res, next) => {
       requestedData: req.body,
       originalData: originalEmployee,
       requesterId,
+      requesterRole: req.user?.role,
+      user: req.user,
       executeCallback: execute
     });
 
@@ -198,6 +202,8 @@ const deleteEmployee = async (req, res, next) => {
       requestedData: null,
       originalData: originalEmployee,
       requesterId,
+      requesterRole: req.user?.role,
+      user: req.user,
       executeCallback: execute
     });
 

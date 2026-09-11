@@ -7,13 +7,17 @@ const ErrorResponse = require('./errorResponse');
  * Intercepts an action and routes it to the approval flow if an approver configuration exists.
  * Otherwise, executes the callback immediately.
  * 
- * @param {string} requestType - 'EMPLOYEE', 'PAYROLL', 'HOLIDAY', 'SHIFT', 'LEAVE'
- * @param {string} actionType - 'CREATE', 'UPDATE', 'DELETE', 'ASSIGN'
+ * Super Admin users bypass all approvals and changes execute directly.
+ * 
+ * @param {string} requestType - 'EMPLOYEE', 'PAYROLL', 'HOLIDAY', 'SHIFT', 'LEAVE_POLICY', 'APPROVER_CONFIG'
+ * @param {string} actionType - 'CREATE', 'UPDATE', 'DELETE', 'ASSIGN', etc.
  * @param {number|string|null} entityId - Target entity ID
  * @param {object} requestedData - New/proposed data payload
  * @param {object|null} originalData - Existing data payload (before changes)
- * @param {number} requesterId - Employee ID of the person making request
- * @param {function} executeCallback - Async function to run immediately if no config is set
+ * @param {number|null} requesterId - Employee ID of the person making request
+ * @param {string|null} requesterRole - User's role name
+ * @param {object|null} user - Decoded JWT user object from req.user
+ * @param {function} executeCallback - Async function to run immediately if no config is set or if bypassed
  * @returns {Promise<object>} - Results or message indicating pending approval
  */
 async function interceptApproval({
@@ -23,8 +27,37 @@ async function interceptApproval({
     requestedData,
     originalData = null,
     requesterId,
+    requesterRole = null,
+    user = null,
     executeCallback
 }) {
+    // 0. Super Admin check: Super admin does NOT need any approvals - changes go directly
+    const roleName = (requesterRole || user?.role || '').toLowerCase().trim();
+    let isSuperAdmin = ['super_admin', 'superadmin', 'super admin'].includes(roleName);
+
+    if (!isSuperAdmin && (requesterId || user?.id)) {
+        try {
+            const checkId = user?.id || requesterId;
+            const [userRows] = await pool.query(
+                `SELECT r.role FROM user_accounts ua 
+                 LEFT JOIN employee e ON ua.employee_id = e.employee_id 
+                 LEFT JOIN app_role r ON r.role_id = COALESCE(e.role_id, ua.role_id) 
+                 WHERE ua.user_accounts_id = ? OR ua.employee_id = ?`,
+                [checkId, checkId]
+            );
+            if (userRows.length > 0 && ['super_admin', 'superadmin', 'super admin'].includes((userRows[0].role || '').toLowerCase().trim())) {
+                isSuperAdmin = true;
+            }
+        } catch (err) {
+            console.error('Error checking superadmin status in interceptApproval:', err.message);
+        }
+    }
+
+    if (isSuperAdmin) {
+        const result = await executeCallback();
+        return { pendingApproval: false, result };
+    }
+
     // Check for duplicate pending requests of the same requestType
     const [pendingRequests] = await pool.execute(
         `SELECT id, requested_data, entity_id, action_type FROM generic_approvals WHERE request_type = ? AND status = 'Pending'`,
@@ -103,9 +136,9 @@ async function interceptApproval({
         }
     }
 
-    if (entityId && actionType === 'UPDATE') {
+    if (entityId && (actionType === 'UPDATE' || actionType === 'DELETE')) {
         const duplicate = pendingRequests.find(r => {
-            const matchesEntity = r.entity_id && parseInt(r.entity_id) === parseInt(entityId) && r.action_type === 'UPDATE';
+            const matchesEntity = r.entity_id && parseInt(r.entity_id) === parseInt(entityId);
             if (!matchesEntity) return false;
 
             if (requestType === 'APPROVER_CONFIG') {
@@ -120,19 +153,16 @@ async function interceptApproval({
         });
 
         if (duplicate) {
-            const subMessage = requestType === 'APPROVER_CONFIG' ? ` for ${requestedData.request_type}` : '';
-            throw new ErrorResponse(`There is already a pending update request for this entity${subMessage} (REQ-${duplicate.id}). Please wait until it is actioned.`, 409, 'PENDING_APPROVAL_CONFLICT');
+            const subMessage = requestType === 'APPROVER_CONFIG' ? ` for ${requestedData?.request_type || ''}` : '';
+            const typeLabel = requestType.toLowerCase().replace('_', ' ');
+            throw new ErrorResponse(
+                `There is already a pending approval request${subMessage} (REQ-${duplicate.id}) for this ${typeLabel}. Please wait until it is actioned, or cancel your pending request in "My Submissions" under Operation Approvals to make new changes.`,
+                409,
+                'PENDING_APPROVAL_CONFLICT'
+            );
         }
     }
 
-    if (entityId && actionType === 'DELETE') {
-        const duplicate = pendingRequests.find(r => 
-            r.entity_id && parseInt(r.entity_id) === parseInt(entityId) && r.action_type === 'DELETE'
-        );
-        if (duplicate) {
-            throw new ErrorResponse(`There is already a pending deletion request for this entity (REQ-${duplicate.id}).`, 409, 'PENDING_APPROVAL_CONFLICT');
-        }
-    }
 
     // 1. Fetch config
     const configRequestType = requestType === 'LEAVE_POLICY' ? 'LEAVE' : requestType;
@@ -144,8 +174,17 @@ async function interceptApproval({
         return { pendingApproval: false, result };
     }
 
+    // If the requester is the final approver (either Level 2, or Level 1 when there's no Level 2), bypass and execute immediately
+    const finalApproverId = config.approver_2_id || config.approver_1_id;
+    const isRequesterFinalApprover = requesterId && finalApproverId && parseInt(requesterId) === parseInt(finalApproverId);
+
+    if (isRequesterFinalApprover) {
+        const result = await executeCallback();
+        return { pendingApproval: false, result };
+    }
+
     // Check if requester is the Level 1 Approver
-    const isRequesterLevel1 = parseInt(requesterId) === parseInt(config.approver_1_id);
+    const isRequesterLevel1 = requesterId && config.approver_1_id && parseInt(requesterId) === parseInt(config.approver_1_id);
 
     if (isRequesterLevel1) {
         // If there is no Level 2 approver, or Level 2 is the same as Level 1:

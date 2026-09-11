@@ -251,6 +251,8 @@ CREATE TABLE `attendance_regularization` (
   `approver_1_action_on` datetime DEFAULT NULL,
   `approver_2_remarks` text,
   `approver_2_action_on` datetime DEFAULT NULL,
+  `applied_by_id` int DEFAULT NULL,
+  `is_proxy` tinyint DEFAULT '0',
   PRIMARY KEY (`id`),
   KEY `fk_ar_substitute` (`substitute_employee_id`),
   KEY `fk_ar_approver1` (`approver_1_id`),

@@ -50,37 +50,10 @@ const saveHoliday = async (req, res, next) => {
     }
 
     const execute = async () => {
-      // Handle batch assignment for multiple employees
-      if (!holiday_id && Array.isArray(employee_ids) && employee_ids.length > 0) {
-        const results = [];
-        for (const emp_id of employee_ids) {
-          try {
-            const result = await HolidayModel.saveHoliday({
-              holiday_id,
-              employee_id: emp_id,
-              holiday_name,
-              holiday_start_date,
-              holiday_end_date: holiday_end_date || holiday_start_date,
-              holiday_type,
-              description,
-              is_active: is_active !== undefined ? is_active : 1
-            });
-            results.push({ employee_id: emp_id, success: true, result });
-          } catch (error) {
-            // Gracefully handle duplicate keys (MySQL error ER_DUP_ENTRY / 1062)
-            if (error.code === 'ER_DUP_ENTRY' || error.errno === 1062) {
-              results.push({ employee_id: emp_id, success: false, reason: 'Duplicate entry ignored' });
-            } else {
-              throw error; // Rethrow other database errors
-            }
-          }
-        }
-        return results;
-      }
-
       const result = await HolidayModel.saveHoliday({
         holiday_id,
         employee_id: employee_id !== undefined ? employee_id : -1,
+        employee_ids,
         holiday_name,
         holiday_start_date,
         holiday_end_date: holiday_end_date || holiday_start_date,
@@ -98,6 +71,8 @@ const saveHoliday = async (req, res, next) => {
       requestedData: req.body,
       originalData,
       requesterId,
+      requesterRole: req.user?.role,
+      user: req.user,
       executeCallback: execute
     });
 
@@ -130,6 +105,8 @@ const deleteHoliday = async (req, res, next) => {
       requestedData: null,
       originalData,
       requesterId,
+      requesterRole: req.user?.role,
+      user: req.user,
       executeCallback: execute
     });
 
@@ -186,6 +163,42 @@ const deleteBulkHolidays = async (req, res, next) => {
   }
 };
 
+const cloneHolidays = async (req, res, next) => {
+  try {
+    const { source_employee_id, target_employee_ids, holiday_ids } = req.body;
+    if (!source_employee_id || !Array.isArray(target_employee_ids) || target_employee_ids.length === 0 || !Array.isArray(holiday_ids) || holiday_ids.length === 0) {
+      return next(new ErrorResponse('source_employee_id, target_employee_ids (array), and holiday_ids (array) are required', 400));
+    }
+
+    const requesterId = req.user.employeeId || req.user.employee_id;
+
+    const execute = async () => {
+      const result = await HolidayModel.cloneHolidays(source_employee_id, target_employee_ids, holiday_ids);
+      return result;
+    };
+
+    const interceptResult = await interceptApproval({
+      requestType: 'HOLIDAY',
+      actionType: 'CLONE',
+      entityId: null,
+      requestedData: req.body,
+      originalData: null,
+      requesterId,
+      requesterRole: req.user?.role,
+      user: req.user,
+      executeCallback: execute
+    });
+
+    if (interceptResult.pendingApproval) {
+      return sendResponse(res, 202, interceptResult.message, { pendingApproval: true });
+    }
+
+    sendResponse(res, 200, 'Holidays cloned successfully', interceptResult.result);
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getGeneralHolidays,
   getEmployeeHolidays,
@@ -193,5 +206,6 @@ module.exports = {
   deleteHoliday,
   getUpcomingHolidays,
   getPersonalHolidays,
-  deleteBulkHolidays
+  deleteBulkHolidays,
+  cloneHolidays
 };

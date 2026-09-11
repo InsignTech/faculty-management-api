@@ -56,7 +56,31 @@ class ReportModel {
         // 2. Fetch all raw data for the range
         // Attendance
         const [attendance] = await pool.execute(
-            `SELECT *, DATE_FORMAT(date, '%Y-%m-%d') as formatted_date FROM attendance_daily WHERE date BETWEEN ? AND ?`,
+            `SELECT 
+                MIN(attendance_id) AS attendance_id,
+                employee_id,
+                date,
+                DATE_FORMAT(date, '%Y-%m-%d') as formatted_date,
+                MIN(first_in_time) AS first_in_time,
+                MAX(last_out_time) AS last_out_time,
+                SUM(worked_mins) AS worked_mins,
+                IF(COUNT(DISTINCT shift_type) > 1, 'Split', MAX(shift_type)) AS shift_type,
+                GROUP_CONCAT(status ORDER BY shift_type SEPARATOR ' / ') AS status,
+                MAX(is_late) AS is_late,
+                SUM(late_minutes) AS late_minutes,
+                MAX(is_early_leaving) AS is_early_leaving,
+                SUM(early_minutes) AS early_minutes,
+                SUM(overtime_minutes) AS overtime_minutes,
+                SUM(deduction_days) AS deduction_days,
+                MAX(is_worked_on_holiday) AS is_worked_on_holiday,
+                MAX(IF(status = 'Regularized', shift_type, NULL)) AS regularization_shift_type,
+                MAX(IF(status = 'OnDuty', shift_type, NULL)) AS onduty_shift_type,
+                MAX(IF(status = 'Leave', 1, 0)) AS is_leave,
+                MAX(IF(status = 'Leave', shift_type, NULL)) AS leave_shift_type,
+                MIN(created_on) AS created_on
+             FROM attendance 
+             WHERE date BETWEEN ? AND ?
+             GROUP BY employee_id, date`,
             [startDate, endDate]
         );
 
@@ -162,8 +186,17 @@ class ReportModel {
                         status = 'Absent';
                     } 
                     // Irregular (Late/Early)
-                    else if (dayAttendance.is_late === 1 || dayAttendance.is_early_leaving === 1) {
-                        status = 'Regularization Required';
+                    else if (dayAttendance.is_late === 1 && dayAttendance.is_early_leaving === 1) {
+                        status = 'Absent';
+                        remark = 'Late & Early Leaving';
+                    } 
+                    else if (dayAttendance.is_late === 1) {
+                        status = 'First Half Absent';
+                        remark = 'Late Arrival';
+                    } 
+                    else if (dayAttendance.is_early_leaving === 1) {
+                        status = 'Second Half Absent';
+                        remark = 'Early Leaving';
                     } 
                     // Normal Present
                     else {
@@ -195,7 +228,7 @@ class ReportModel {
                     late_minutes: dayAttendance ? dayAttendance.late_minutes : 0,
                     early_minutes: dayAttendance ? dayAttendance.early_minutes : 0,
                     overtime_minutes: dayAttendance ? dayAttendance.overtime_minutes : 0,
-                    deduction_days: dayAttendance ? parseFloat(dayAttendance.deduction_days) : (status === 'Absent' ? 1.00 : 0.00),
+                    deduction_days: dayAttendance ? parseFloat(dayAttendance.deduction_days) : (status === 'Absent' ? 1.00 : (status.includes('Half Absent') ? 0.50 : 0.00)),
                     shift_type: dayAttendance ? dayAttendance.shift_type : null,
                     regularization_shift_type: dayAttendance ? dayAttendance.regularization_shift_type : null,
                     onduty_shift_type: dayAttendance ? dayAttendance.onduty_shift_type : null,
@@ -212,6 +245,17 @@ class ReportModel {
 
     static async getDeductionsReport(managerId, isAdmin, { startDate, endDate, departmentId, search, filterType }) {
         let sql = `
+            WITH ad AS (
+                SELECT employee_id, date, 
+                       MIN(first_in_time) AS first_in_time,
+                       MAX(last_out_time) AS last_out_time,
+                       SUM(worked_mins) AS worked_mins,
+                       IF(COUNT(DISTINCT shift_type) > 1, 'Split', MAX(shift_type)) AS shift_type,
+                       GROUP_CONCAT(status ORDER BY shift_type SEPARATOR ' / ') AS status,
+                       SUM(deduction_days) AS deduction_days
+                FROM attendance
+                GROUP BY employee_id, date
+            )
             SELECT * FROM (
                 SELECT 
                     ad.date,
@@ -225,7 +269,7 @@ class ReportModel {
                     ad.deduction_days,
                     'Leave' AS request_type,
                     lr.leave_request_id AS request_id,
-                    lr.leave_type AS request_details,
+                    CONCAT(lr.leave_type, ' (', COALESCE(lr.leave_half_type, 'FullDay'), ')') AS request_details,
                     lr.status AS request_status,
                     lr.current_level,
                     lr.applied_on,
@@ -240,7 +284,7 @@ class ReportModel {
                     lr.approver_1_remarks,
                     lr.approver_2_remarks,
                     lr.reason
-                FROM attendance_daily ad
+                FROM ad
                 JOIN employee e ON ad.employee_id = e.employee_id
                 LEFT JOIN department dept ON e.department_id = dept.department_id
                 JOIN leave_requests lr ON lr.employee_id = ad.employee_id 
@@ -281,7 +325,7 @@ class ReportModel {
                     ar.approver_1_remarks,
                     ar.approver_2_remarks,
                     ar.reason
-                FROM attendance_daily ad
+                FROM ad
                 JOIN employee e ON ad.employee_id = e.employee_id
                 LEFT JOIN department dept ON e.department_id = dept.department_id
                 JOIN attendance_regularization ar ON ar.employee_id = ad.employee_id 
@@ -322,7 +366,7 @@ class ReportModel {
                     NULL AS approver_1_remarks,
                     NULL AS approver_2_remarks,
                     NULL AS reason
-                FROM attendance_daily ad
+                FROM ad
                 JOIN employee e ON ad.employee_id = e.employee_id
                 LEFT JOIN department dept ON e.department_id = dept.department_id
                 LEFT JOIN app_role r ON e.role_id = r.role_id
@@ -508,7 +552,7 @@ class ReportModel {
                     employee_id,
                     DATE_FORMAT(date, '%m-%Y') AS month_year,
                     SUM(deduction_days) AS total_deductions
-                FROM attendance_daily
+                FROM attendance
                 GROUP BY employee_id, DATE_FORMAT(date, '%m-%Y')
             ) deductions ON el.emp_id = deductions.employee_id 
                          AND el.month_year = deductions.month_year
@@ -563,26 +607,27 @@ class ReportModel {
         } else if (type === 'Deduction') {
             const query = `
                 SELECT 
-                    ad.attendance_id AS id,
+                    MIN(ad.attendance_id) AS id,
                     'Deduction' AS type_name,
                     DATE_FORMAT(ad.date, '%Y-%m-%d') AS start_date,
                     DATE_FORMAT(ad.date, '%Y-%m-%d') AS end_date,
-                    ad.deduction_days AS total_days,
+                    SUM(ad.deduction_days) AS total_days,
                     CASE 
-                        WHEN ad.deduction_days = 1.00 THEN 'Full Day'
-                        WHEN ad.deduction_days = 0.50 THEN 'Half Day'
+                        WHEN SUM(ad.deduction_days) = 1.00 THEN 'Full Day'
+                        WHEN SUM(ad.deduction_days) = 0.50 THEN 'Half Day'
                         ELSE 'Partial'
                     END AS half_type,
-                    COALESCE(ad.status, 'Absent') AS reason,
+                    GROUP_CONCAT(ad.status ORDER BY ad.shift_type SEPARATOR ' / ') AS reason,
                     'Deducted' AS status,
                     DATE_FORMAT(ad.date, '%Y-%m-%d %H:%i:%s') AS applied_on,
                     'System' AS approved_by_name,
                     DATE_FORMAT(ad.date, '%Y-%m-%d %H:%i:%s') AS approved_on,
                     NULL AS rejection_reason
-                FROM attendance_daily ad
+                FROM attendance ad
                 WHERE ad.employee_id = ? 
                   AND DATE_FORMAT(ad.date, '%m-%Y') = ?
-                  AND ad.deduction_days > 0
+                GROUP BY ad.employee_id, ad.date
+                HAVING SUM(ad.deduction_days) > 0
                 ORDER BY ad.date DESC
             `;
             const [rows] = await pool.execute(query, [employeeId, monthYear]);

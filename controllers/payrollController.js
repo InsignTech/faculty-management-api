@@ -173,6 +173,8 @@ const saveSalaryStructure = async (req, res, next) => {
             requestedData: { subtype: 'SALARY_STRUCTURE', payload: { ...req.body, created_by: createdBy } },
             originalData: { subtype: 'SALARY_STRUCTURE', payload: originalData },
             requesterId,
+            requesterRole: req.user?.role,
+            user: req.user,
             executeCallback: execute
         });
 
@@ -214,6 +216,8 @@ const saveDeductionConfig = async (req, res, next) => {
             requestedData: { subtype: 'DEDUCTION_CONFIG', payload: req.body },
             originalData: { subtype: 'DEDUCTION_CONFIG', payload: originalData },
             requesterId,
+            requesterRole: req.user?.role,
+            user: req.user,
             executeCallback: execute
         });
 
@@ -251,6 +255,8 @@ const saveTdsConfig = async (req, res, next) => {
             requestedData: { subtype: 'TDS_CONFIG', payload: req.body },
             originalData: { subtype: 'TDS_CONFIG', payload: originalData },
             requesterId,
+            requesterRole: req.user?.role,
+            user: req.user,
             executeCallback: execute
         });
 
@@ -292,6 +298,8 @@ const saveBankAccount = async (req, res, next) => {
             requestedData: { subtype: 'BANK_ACCOUNT', payload: req.body },
             originalData: { subtype: 'BANK_ACCOUNT', payload: originalData },
             requesterId,
+            requesterRole: req.user?.role,
+            user: req.user,
             executeCallback: execute
         });
 

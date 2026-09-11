@@ -6,16 +6,38 @@ const ShiftModel = require('../models/shiftModel');
 const OperationApproverConfigModel = require('../models/operationApproverConfigModel');
 const ApproverConfigModel = require('../models/approverConfigModel');
 const LeavePolicyModel = require('../models/leavePolicyModel');
+const pool = require('../config/db');
 const { sendResponse } = require('../utils/responseHelper');
 const ErrorResponse = require('../utils/errorResponse');
 
 const getPendingApprovals = async (req, res, next) => {
     try {
         const loggedInEmpId = req.user.employeeId || req.user.employee_id;
-        if (!loggedInEmpId) {
+        const role = (req.user.role || '').toLowerCase().trim();
+        const isSuperAdmin = ['super_admin', 'superadmin', 'super admin'].includes(role);
+
+        if (!loggedInEmpId && !isSuperAdmin) {
             return next(new ErrorResponse('Employee ID not found in token', 400));
         }
-        const pending = await GenericApprovalModel.getPendingForApprover(loggedInEmpId);
+
+        let pending = [];
+        if (isSuperAdmin) {
+            const [rows] = await pool.execute(`
+                SELECT ga.*,
+                       req.employee_name AS requester_name,
+                       a1.employee_name AS approver_1_name,
+                       a2.employee_name AS approver_2_name
+                FROM generic_approvals ga
+                LEFT JOIN employee req ON ga.requester_id = req.employee_id
+                LEFT JOIN employee a1 ON ga.approver_1_id = a1.employee_id
+                LEFT JOIN employee a2 ON ga.approver_2_id = a2.employee_id
+                WHERE ga.status = 'Pending'
+                ORDER BY ga.requested_on DESC
+            `);
+            pending = rows;
+        } else {
+            pending = await GenericApprovalModel.getPendingForApprover(loggedInEmpId);
+        }
         sendResponse(res, 200, 'Pending operations approvals fetched', pending);
     } catch (error) {
         next(error);
@@ -25,10 +47,33 @@ const getPendingApprovals = async (req, res, next) => {
 const getApprovalsHistory = async (req, res, next) => {
     try {
         const loggedInEmpId = req.user.employeeId || req.user.employee_id;
-        if (!loggedInEmpId) {
+        const role = (req.user.role || '').toLowerCase().trim();
+        const isSuperAdmin = ['super_admin', 'superadmin', 'super admin'].includes(role);
+
+        if (!loggedInEmpId && !isSuperAdmin) {
             return next(new ErrorResponse('Employee ID not found in token', 400));
         }
-        const history = await GenericApprovalModel.getApprovalsHistory(loggedInEmpId);
+
+        let history = [];
+        if (isSuperAdmin) {
+            const [rows] = await pool.execute(`
+                SELECT ga.*,
+                       req.employee_name AS requester_name,
+                       a1.employee_name AS approver_1_name,
+                       a2.employee_name AS approver_2_name,
+                       act.employee_name AS actioned_by_name
+                FROM generic_approvals ga
+                LEFT JOIN employee req ON ga.requester_id = req.employee_id
+                LEFT JOIN employee a1 ON ga.approver_1_id = a1.employee_id
+                LEFT JOIN employee a2 ON ga.approver_2_id = a2.employee_id
+                LEFT JOIN employee act ON ga.actioned_by_id = act.employee_id
+                WHERE ga.status != 'Pending'
+                ORDER BY ga.actioned_on DESC, ga.requested_on DESC
+            `);
+            history = rows;
+        } else {
+            history = await GenericApprovalModel.getApprovalsHistory(loggedInEmpId);
+        }
         sendResponse(res, 200, 'Operations approvals history fetched', history);
     } catch (error) {
         next(error);
@@ -54,13 +99,13 @@ const actionApproval = async (req, res, next) => {
             return next(new ErrorResponse('This request is already actioned', 400));
         }
 
-        // Verify authorization
-        const isApprover1 = approvalRequest.current_level === 1 && approvalRequest.approver_1_id === loggedInEmpId;
-        const isApprover2 = approvalRequest.current_level === 2 && approvalRequest.approver_2_id === loggedInEmpId;
-        const isAdmin = ['admin', 'super_admin', 'principal', 'operations manager', 'operations_manager'].includes(req.user.role?.toLowerCase());
+        // Verify authorization: only the designated approver for current level or Super Admin
+        const isApprover1 = approvalRequest.current_level === 1 && parseInt(approvalRequest.approver_1_id) === parseInt(loggedInEmpId);
+        const isApprover2 = approvalRequest.current_level === 2 && parseInt(approvalRequest.approver_2_id) === parseInt(loggedInEmpId);
+        const isSuperAdmin = ['super_admin', 'superadmin', 'super admin'].includes((req.user.role || '').toLowerCase().trim());
 
-        if (!isApprover1 && !isApprover2 && !isAdmin) {
-            return next(new ErrorResponse('You are not authorized to action this request', 403));
+        if (!isApprover1 && !isApprover2 && !isSuperAdmin) {
+            return next(new ErrorResponse('You are not authorized to action this request as you are not the designated approver for this level', 403));
         }
 
         if (status === 'Rejected') {
@@ -68,8 +113,8 @@ const actionApproval = async (req, res, next) => {
             return sendResponse(res, 200, 'Request has been rejected');
         }
 
-        // If Approved, handle levels
-        if (approvalRequest.current_level === 1 && approvalRequest.approver_2_id && approvalRequest.approver_2_id !== approvalRequest.approver_1_id) {
+        // If Approved, handle levels (Super Admin bypasses level escalation for immediate final approval)
+        if (!isSuperAdmin && approvalRequest.current_level === 1 && approvalRequest.approver_2_id && approvalRequest.approver_2_id !== approvalRequest.approver_1_id) {
             // If Level 2 approver is the requester themselves, their approval is implied. Apply changes immediately!
             if (approvalRequest.approver_2_id === approvalRequest.requester_id) {
                 // Implied Level 2 approval. Fall through to apply changes.
@@ -112,18 +157,15 @@ const actionApproval = async (req, res, next) => {
                 await HolidayModel.saveHoliday(requestedData);
             } else if (actionType === 'DELETE') {
                 await HolidayModel.deleteHoliday(entityId);
+            } else if (actionType === 'CLONE') {
+                const { source_employee_id, target_employee_ids, holiday_ids } = requestedData;
+                await HolidayModel.cloneHolidays(source_employee_id, target_employee_ids, holiday_ids);
             }
         } else if (requestType === 'SHIFT') {
             if (actionType === 'UPDATE') {
                 await ShiftModel.updateGlobalShift(entityId, requestedData);
             } else if (actionType === 'ASSIGN') {
-                await ShiftModel.assignEmployeeShifts(
-                    requestedData.employee_id,
-                    requestedData.from_date,
-                    requestedData.to_date,
-                    requestedData.shifts,
-                    requestedData.modified_by
-                );
+                await ShiftModel.assignShiftRequest(requestedData);
             } else if (actionType === 'DELETE') {
                 await ShiftModel.deleteEmployeeShiftGroup(
                     requestedData.employee_id,
@@ -173,19 +215,17 @@ const actionApproval = async (req, res, next) => {
 const checkAccess = async (req, res, next) => {
     try {
         const loggedInEmpId = req.user.employeeId || req.user.employee_id;
-        const role = req.user.role?.toLowerCase();
+        const role = (req.user.role || '').toLowerCase().trim();
+        const isSuperAdmin = ['super_admin', 'superadmin', 'super admin'].includes(role);
 
-        // Superadmin, principal, and operations manager always have access
-        if (['super_admin', 'principal', 'operations manager', 'operations_manager'].includes(role)) {
-            return sendResponse(res, 200, 'Access allowed', { hasAccess: true });
+        if (!loggedInEmpId && !isSuperAdmin) {
+            return sendResponse(res, 200, 'Access checked', { hasAccess: false, isApprover: false });
         }
 
-        if (!loggedInEmpId) {
-            return sendResponse(res, 200, 'Access denied', { hasAccess: false });
-        }
+        const isApprover = isSuperAdmin || (loggedInEmpId ? await OperationApproverConfigModel.checkApproverAccess(loggedInEmpId) : false);
 
-        const isApprover = await OperationApproverConfigModel.checkApproverAccess(loggedInEmpId);
-        sendResponse(res, 200, 'Access checked', { hasAccess: isApprover });
+        // Every logged-in user can access the Operation Approvals page (to view/cancel My Submissions)
+        sendResponse(res, 200, 'Access checked', { hasAccess: true, isApprover });
     } catch (error) {
         next(error);
     }
@@ -215,12 +255,44 @@ const getMyRequests = async (req, res, next) => {
     } catch (error) {
         next(error);
     }
+}
+const cancelRequest = async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const loggedInEmpId = req.user.employeeId || req.user.employee_id;
+        const role = (req.user.role || '').toLowerCase().trim();
+        const isSuperAdmin = ['super_admin', 'superadmin', 'super admin'].includes(role);
+
+        const approvalRequest = await GenericApprovalModel.getById(id);
+        if (!approvalRequest) {
+            return next(new ErrorResponse('Approval request not found', 404));
+        }
+
+        if (approvalRequest.status !== 'Pending') {
+            return next(new ErrorResponse('Only pending requests can be cancelled', 400));
+        }
+
+        // Authorization check: Only original requester or Super Admin can cancel
+        if (parseInt(approvalRequest.requester_id) !== parseInt(loggedInEmpId) && !isSuperAdmin) {
+            return next(new ErrorResponse('You are only authorized to cancel requests submitted by yourself', 403));
+        }
+
+        const cancelRemarks = req.body?.remarks || 'Cancelled by requester';
+        await GenericApprovalModel.actionRequest(id, 'Cancelled', cancelRemarks, loggedInEmpId);
+
+        sendResponse(res, 200, 'Request cancelled successfully');
+    } catch (error) {
+        next(error);
+    }
 };
+
 
 module.exports = {
     getPendingApprovals,
     getApprovalsHistory,
     actionApproval,
     checkAccess,
-    getMyRequests
+    getMyRequests,
+    cancelRequest
 };
+

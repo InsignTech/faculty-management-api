@@ -12,11 +12,12 @@ router.get('/operations', genericApprovalController.getPendingApprovals);
 router.get('/operations/my-requests', genericApprovalController.getMyRequests);
 router.get('/operations/history', genericApprovalController.getApprovalsHistory);
 router.post('/operations/:id/action', genericApprovalController.actionApproval);
+router.post('/operations/:id/cancel', genericApprovalController.cancelRequest);
 router.get('/check-access', genericApprovalController.checkAccess);
 
 // Configurations endpoints (Restricted to Super Admin/Principal)
-router.get('/operation-config', authorize('super_admin', 'Principal', 'principal', 'Super Admin'), operationApproverConfigController.getConfigs);
-router.get('/operation-config/:type', authorize('super_admin', 'Principal', 'principal', 'Super Admin'), operationApproverConfigController.getConfigByType);
-router.post('/operation-config', authorize('super_admin', 'Principal', 'principal', 'Super Admin'), operationApproverConfigController.saveConfig);
+router.get('/operation-config', authorize('super_admin', 'Super Admin'), operationApproverConfigController.getConfigs);
+router.get('/operation-config/:type', authorize('super_admin', 'Super Admin'), operationApproverConfigController.getConfigByType);
+router.post('/operation-config', authorize('super_admin', 'Super Admin'), operationApproverConfigController.saveConfig);
 
 module.exports = router;

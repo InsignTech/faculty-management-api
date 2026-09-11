@@ -73,54 +73,46 @@ proc: BEGIN
         substitute_employee_id = COALESCE(p_substitute_id, substitute_employee_id)
     WHERE leave_request_id = p_leave_request_id;
 
-    -- ── Phase 1: Validation Loop (Check for conflicts BEFORE updating balance) ──
+    -- ── Phase 1: Validation Loop (Conflict check) ──
     IF p_action = 'Approved' THEN
         SET v_current_date = v_start_date;
         validation_loop: WHILE v_current_date <= v_end_date DO
-            SET @reg_shift = NULL;
-            SET @is_leave = 0;
-            SET @leave_shift = NULL;
+            SET @has_full_day_conflict = EXISTS (
+                SELECT 1 FROM attendance 
+                WHERE employee_id = v_emp_id AND date = v_current_date 
+                  AND status IN ('Leave', 'Regularized', 'OnDuty') AND shift_type = 'FullDay'
+            );
+            SET @has_fh_conflict = EXISTS (
+                SELECT 1 FROM attendance 
+                WHERE employee_id = v_emp_id AND date = v_current_date 
+                  AND status IN ('Leave', 'Regularized', 'OnDuty') AND shift_type = 'FirstHalf'
+            );
+            SET @has_sh_conflict = EXISTS (
+                SELECT 1 FROM attendance 
+                WHERE employee_id = v_emp_id AND date = v_current_date 
+                  AND status IN ('Leave', 'Regularized', 'OnDuty') AND shift_type = 'SecondHalf'
+            );
 
-            SELECT regularization_shift_type, is_leave, leave_shift_type 
-            INTO @reg_shift, @is_leave, @leave_shift
-            FROM   attendance_daily
-            WHERE  employee_id = v_emp_id AND date = v_current_date
-            FOR UPDATE;
-
-            -- Check Regularization/On-Duty Conflict
-            IF @reg_shift IS NOT NULL THEN
-                IF @reg_shift = 'FullDay' THEN
-                    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Conflict: One or more days are already fully regularized/on-duty';
-                END IF;
-
-                IF @reg_shift = v_leave_half AND v_leave_half != 'FullDay' THEN
-                    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Conflict: This half of the day is already regularized/on-duty';
-                END IF;
-                
-                IF v_leave_half = 'FullDay' AND @reg_shift != 'FullDay' THEN
-                    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Conflict: A part of this day is already regularized/on-duty. Cannot apply full-day leave.';
-                END IF;
+            IF @has_full_day_conflict THEN
+                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Conflict: One or more days already have an approved leave or regularization';
             END IF;
 
-            -- Check Leave Conflict
-            IF @is_leave = 1 THEN
-                IF @leave_shift = 'FullDay' THEN
-                    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Conflict: One or more days already have an approved leave';
-                END IF;
+            IF v_leave_half = 'FullDay' AND (@has_fh_conflict OR @has_sh_conflict) THEN
+                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Conflict: Part of this day is already covered. Cannot apply full-day leave.';
+            END IF;
 
-                IF @leave_shift = v_leave_half AND v_leave_half != 'FullDay' THEN
-                    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Conflict: An approved leave already exists for this half-day';
-                END IF;
+            IF v_leave_half = 'FirstHalf' AND @has_fh_conflict THEN
+                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Conflict: First half is already covered by leave or regularization';
+            END IF;
 
-                IF v_leave_half = 'FullDay' AND @leave_shift != 'FullDay' THEN
-                    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Conflict: A part of this day already has an approved leave. Cannot apply full-day leave.';
-                END IF;
+            IF v_leave_half = 'SecondHalf' AND @has_sh_conflict THEN
+                SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Conflict: Second half is already covered by leave or regularization';
             END IF;
 
             SET v_current_date = DATE_ADD(v_current_date, INTERVAL 1 DAY);
         END WHILE;
 
-        -- ── Phase 2: Update employee_leaves table (Safe now because Phase 1 passed) ──
+        -- ── Phase 2: Update employee_leaves table ──
         SET @v_total_days = 0;
         SELECT total_days INTO @v_total_days FROM leave_requests WHERE leave_request_id = p_leave_request_id;
         
@@ -129,100 +121,10 @@ proc: BEGIN
         ON DUPLICATE KEY UPDATE 
             leaves_taken = leaves_taken + @v_total_days;
 
-        -- ── Phase 3: Update attendance_daily ─────────────────────────────────────
+        -- ── Phase 3: Rebuild attendance records using sp_process_attendance_shiftwise ──
         SET v_current_date = v_start_date;
         date_loop: WHILE v_current_date <= v_end_date DO
-            -- ── Skip weekends and holidays ────────────────────────────────────────
-            SET @existing_status = NULL;
-            SELECT status INTO @existing_status FROM attendance_daily
-            WHERE employee_id = v_emp_id AND date = v_current_date LIMIT 1;
-
-            IF @existing_status IN ('WeekEnd','Public Holiday','Exceptional Holiday') THEN
-                SET v_current_date = DATE_ADD(v_current_date, INTERVAL 1 DAY);
-                ITERATE date_loop;
-            END IF;
-
-            IF EXISTS (
-                SELECT 1 FROM holiday_master
-                WHERE v_current_date BETWEEN holiday_start_date AND holiday_end_date
-                  AND is_active = 1 AND employee_id IN (v_emp_id, -1)
-            ) THEN
-                SET v_current_date = DATE_ADD(v_current_date, INTERVAL 1 DAY);
-                ITERATE date_loop;
-            END IF;
-
-            -- Read ALL existing coverage data
-            SET @first_in = NULL; SET @last_out = NULL; SET @worked_mins = 0;
-            SET @cur_shift = NULL; SET @cur_status = NULL;
-            SET @reg_shift = NULL; SET @od_shift = NULL;
-            SET @is_leave_existing = 0; SET @leave_shift_existing = NULL;
-            SET @cur_deduct = 0.00;
-
-            SELECT 
-                first_in_time, last_out_time, worked_mins, 
-                shift_type, status,
-                regularization_shift_type, onduty_shift_type,
-                is_leave, leave_shift_type, deduction_days
-            INTO 
-                @first_in, @last_out, @worked_mins,
-                @cur_shift, @cur_status,
-                @reg_shift, @od_shift,
-                @is_leave_existing, @leave_shift_existing, @cur_deduct
-            FROM attendance_daily
-            WHERE employee_id = v_emp_id AND date = v_current_date
-            LIMIT 1;
-
-            -- ── Calculate Merged Coverage ────────────────────────────────────────
-            SET @v_first_half_covered = (
-                (COALESCE(@cur_status, '') = 'Present' AND @cur_shift IN ('FirstHalf', 'FullDay')) OR
-                (COALESCE(@reg_shift, '') IN ('FirstHalf', 'FullDay')) OR
-                (COALESCE(@od_shift, '') IN ('FirstHalf', 'FullDay')) OR
-                (COALESCE(@is_leave_existing, 0) = 1 AND COALESCE(@leave_shift_existing, '') IN ('FirstHalf', 'FullDay')) OR
-                (COALESCE(v_is_paid, 1) = 1 AND v_leave_half IN ('FirstHalf', 'FullDay'))
-            );
-
-            SET @v_second_half_covered = (
-                (COALESCE(@cur_status, '') = 'Present' AND @cur_shift IN ('SecondHalf', 'FullDay')) OR
-                (COALESCE(@reg_shift, '') IN ('SecondHalf', 'FullDay')) OR
-                (COALESCE(@od_shift, '') IN ('SecondHalf', 'FullDay')) OR
-                (COALESCE(@is_leave_existing, 0) = 1 AND COALESCE(@leave_shift_existing, '') IN ('SecondHalf', 'FullDay')) OR
-                (COALESCE(v_is_paid, 1) = 1 AND v_leave_half IN ('SecondHalf', 'FullDay'))
-            );
-
-            SET @final_deduct = IF(@v_first_half_covered AND @v_second_half_covered, 0.00, 0.50);
-            IF NOT @v_first_half_covered AND NOT @v_second_half_covered THEN SET @final_deduct = 1.00; END IF;
-
-            IF COALESCE(v_is_paid, 1) = 0 THEN
-                SET @final_deduct = GREATEST(COALESCE(@cur_deduct, 0.00), @final_deduct);
-            END IF;
-
-            SET @final_shift = 'Absent';
-            IF @v_first_half_covered AND @v_second_half_covered THEN SET @final_shift = 'FullDay';
-            ELSEIF @v_first_half_covered THEN SET @final_shift = 'FirstHalf';
-            ELSEIF @v_second_half_covered THEN SET @final_shift = 'SecondHalf';
-            END IF;
-
-            SET @final_status = IF(@final_shift = 'FullDay' OR @cur_shift = 'FullDay', 'Present', 'Leave');
-
-            -- Final Update
-            INSERT INTO attendance_daily (
-                employee_id, date, first_in_time, last_out_time, worked_mins,
-                shift_type, status, is_late, late_minutes, is_early_leaving, early_minutes,
-                overtime_minutes, deduction_days, is_worked_on_holiday,
-                is_leave, leave_shift_type
-            ) VALUES (
-                v_emp_id, v_current_date, @first_in, @last_out, @worked_mins,
-                @final_shift, @final_status, 0, 0, 0, 0, 0,
-                @final_deduct, 0, 1, v_leave_half
-            )
-            ON DUPLICATE KEY UPDATE
-                shift_type = @final_shift,
-                status = @final_status,
-                deduction_days = @final_deduct,
-                is_leave = 1,
-                leave_shift_type = IF(v_leave_half = 'FullDay', 'FullDay', 
-                                      IF(@is_leave_existing = 1 AND @leave_shift_existing != v_leave_half, 'FullDay', v_leave_half));
-
+            CALL sp_process_attendance_shiftwise(v_current_date);
             SET v_current_date = DATE_ADD(v_current_date, INTERVAL 1 DAY);
         END WHILE date_loop;
     END IF;

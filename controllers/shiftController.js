@@ -59,6 +59,8 @@ const updateGlobalShift = async (req, res, next) => {
       requestedData: req.body,
       originalData,
       requesterId,
+      requesterRole: req.user?.role,
+      user: req.user,
       executeCallback: execute
     });
 
@@ -92,45 +94,21 @@ const assignEmployeeShift = async (req, res, next) => {
     const requesterId = req.user.employeeId || req.user.employee_id;
 
     const execute = async () => {
-      let targetEmployeeIds = [];
-      if (employee_id) {
-        targetEmployeeIds.push(employee_id);
-      } else if (role_id) {
-        const roleIds = Array.isArray(role_id) ? role_id : [role_id];
-        const activeRoleIds = roleIds.filter(id => id && id !== 'all');
-        
-        if (activeRoleIds.length > 0) {
-          const [rows] = await pool.query('SELECT employee_id FROM employee WHERE role_id IN (?) AND active = 1', [activeRoleIds]);
-          targetEmployeeIds = rows.map(r => r.employee_id);
-        }
-      }
-
-      if (targetEmployeeIds.length === 0) {
+      const results = await ShiftModel.assignShiftRequest({
+        employee_id,
+        role_id,
+        from_date,
+        to_date,
+        shifts,
+        modified_by: req.user.name || 'admin'
+      });
+      
+      const targetEmployeeIdsCount = results.length;
+      if (targetEmployeeIdsCount === 0) {
         throw new ErrorResponse('No active employees found for the selected roles', 400);
       }
-
-      const results = [];
-      let overlapCount = 0;
-      for (const emp_id of targetEmployeeIds) {
-        try {
-          await ShiftModel.assignEmployeeShifts(
-            emp_id,
-            from_date,
-            to_date,
-            shifts,
-            req.user.name || 'admin'
-          );
-          results.push({ employee_id: emp_id, success: true });
-        } catch (error) {
-          if (error.message.includes('overlaps')) {
-            overlapCount++;
-            results.push({ employee_id: emp_id, success: false, reason: 'Overlap error' });
-          } else {
-            throw error;
-          }
-        }
-      }
-      return { results, targetEmployeeIdsCount: targetEmployeeIds.length, overlapCount };
+      const overlapCount = results.filter(r => !r.success).length;
+      return { results, targetEmployeeIdsCount, overlapCount };
     };
 
     const interceptResult = await interceptApproval({
@@ -147,6 +125,8 @@ const assignEmployeeShift = async (req, res, next) => {
       },
       originalData: null,
       requesterId,
+      requesterRole: req.user?.role,
+      user: req.user,
       executeCallback: execute
     });
 
@@ -182,6 +162,8 @@ const deleteEmployeeShiftGroup = async (req, res, next) => {
             },
             originalData: null,
             requesterId,
+            requesterRole: req.user?.role,
+            user: req.user,
             executeCallback: execute
         });
 
@@ -223,6 +205,8 @@ const deleteBulkShifts = async (req, res, next) => {
       },
       originalData: null,
       requesterId,
+      requesterRole: req.user?.role,
+      user: req.user,
       executeCallback: execute
     });
 

@@ -385,24 +385,27 @@ class PayrollModel {
 
         // 2. Check if there are any attendance records for this period
         const [attCountRows] = await pool.execute(
-            'SELECT COUNT(*) AS count FROM attendance_daily WHERE employee_id = ? AND date BETWEEN ? AND ?',
+            'SELECT COUNT(*) AS count FROM attendance WHERE employee_id = ? AND date BETWEEN ? AND ?',
             [employeeId, start_date, end_date]
         );
         const hasRecords = attCountRows[0].count > 0;
 
         if (hasRecords) {
-            // Get records with LOP deduction
+            // Get records with LOP deduction from attendance table
             const [rows] = await pool.execute(
-                `SELECT date, deduction_days, status, shift_type 
-                 FROM attendance_daily 
-                 WHERE employee_id = ? AND date BETWEEN ? AND ? AND (deduction_days > 0 OR status = 'Absent')
+                `SELECT date, SUM(deduction_days) AS deduction_days, 
+                        GROUP_CONCAT(status ORDER BY shift_type SEPARATOR ' / ') AS status
+                 FROM attendance 
+                 WHERE employee_id = ? AND date BETWEEN ? AND ?
+                 GROUP BY employee_id, date
+                 HAVING SUM(deduction_days) > 0 OR MAX(status = 'Absent')
                  ORDER BY date ASC`,
                 [employeeId, start_date, end_date]
             );
             return rows.map(r => ({
                 date: r.date,
                 deduction_days: parseFloat(r.deduction_days || 0),
-                reason: r.status === 'Absent' ? 'Absent' : `Deduction (${r.status})`,
+                reason: r.status.includes('Absent') ? 'Absent' : `Deduction (${r.status})`,
                 type: 'attendance_record'
             }));
         } else {

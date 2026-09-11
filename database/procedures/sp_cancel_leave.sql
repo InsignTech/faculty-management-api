@@ -12,6 +12,7 @@ BEGIN
     DECLARE v_status VARCHAR(20);
     DECLARE v_start_date DATE;
     DECLARE v_end_date DATE;
+    DECLARE v_current_date DATE;
 
     -- ─── Transaction Management ──────────────────────────────────────────────
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
@@ -48,17 +49,12 @@ BEGIN
           AND leave_type = v_leave_type 
           AND month_year = DATE_FORMAT(v_start_date, '%m-%Y');
         
-        UPDATE attendance_daily
-        SET is_leave = 0,
-            is_leave_type = NULL,
-            leave_shift_type = NULL,
-            status = CASE 
-                WHEN regularization_shift_type IS NOT NULL OR onduty_shift_type IS NOT NULL OR (shift_type IS NOT NULL AND shift_type != 'Absent') THEN 'Present'
-                ELSE 'Absent'
-            END
-        WHERE employee_id = v_emp_id 
-          AND date BETWEEN v_start_date AND v_end_date
-          AND is_leave = 1;
+        -- Loop and rebuild attendance records for the cancelled leave range
+        SET v_current_date = v_start_date;
+        WHILE v_current_date <= v_end_date DO
+            CALL sp_process_attendance_shiftwise(v_current_date);
+            SET v_current_date = DATE_ADD(v_current_date, INTERVAL 1 DAY);
+        END WHILE;
     END IF;
 
     COMMIT;
