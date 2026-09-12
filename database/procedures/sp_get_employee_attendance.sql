@@ -27,6 +27,8 @@ BEGIN
         MAX(IF(a.status = 'OnDuty', a.shift_type, NULL)) AS onduty_shift_type,
         MAX(IF(a.status = 'Leave', 1, 0)) AS is_leave,
         MAX(IF(a.status = 'Leave', a.shift_type, NULL)) AS leave_shift_type,
+        MAX(IF(a.shift_type = 'FirstHalf', a.status, NULL)) AS first_half_status,
+        MAX(IF(a.shift_type = 'SecondHalf', a.status, NULL)) AS second_half_status,
         MIN(a.created_on) AS created_on,
         (
             SELECT GROUP_CONCAT(
