@@ -145,10 +145,10 @@ const checkApproverStatus = async (req, res, next) => {
             );
             if (mgrRows.length > 0) isApprover = true;
 
-            // 2. Check approver_config table
+            // 2. Check employee_approver_configs table
             if (!isApprover) {
                 const [apprRows] = await pool.execute(
-                    'SELECT 1 FROM approver_config WHERE approver_1_id = ? OR approver_2_id = ? LIMIT 1',
+                    'SELECT 1 FROM employee_approver_configs WHERE approver_1_id = ? OR approver_2_id = ? LIMIT 1',
                     [employeeId, employeeId]
                 );
                 if (apprRows.length > 0) isApprover = true;
