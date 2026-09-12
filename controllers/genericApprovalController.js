@@ -214,18 +214,10 @@ const actionApproval = async (req, res, next) => {
 
 const checkAccess = async (req, res, next) => {
     try {
-        const loggedInEmpId = req.user.employeeId || req.user.employee_id;
-        const role = (req.user.role || '').toLowerCase().trim();
-        const isSuperAdmin = ['super_admin', 'superadmin', 'super admin'].includes(role);
+        const role = (req.user?.role || '').toLowerCase().trim();
+        const isAllowedRole = ['super_admin', 'superadmin', 'super admin', 'principal', 'operations manager', 'operations_manager'].includes(role);
 
-        if (!loggedInEmpId && !isSuperAdmin) {
-            return sendResponse(res, 200, 'Access checked', { hasAccess: false, isApprover: false });
-        }
-
-        const isApprover = isSuperAdmin || (loggedInEmpId ? await OperationApproverConfigModel.checkApproverAccess(loggedInEmpId) : false);
-
-        // Every logged-in user can access the Operation Approvals page (to view/cancel My Submissions)
-        sendResponse(res, 200, 'Access checked', { hasAccess: true, isApprover });
+        sendResponse(res, 200, 'Access checked', { hasAccess: isAllowedRole, isApprover: isAllowedRole });
     } catch (error) {
         next(error);
     }
