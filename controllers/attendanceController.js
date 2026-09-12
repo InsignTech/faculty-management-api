@@ -283,8 +283,8 @@ const getMyAdjustments = async (req, res, next) => {
 // @route   GET /api/attendance/pending-adjustments
 const getPendingAdjustments = async (req, res, next) => {
     try {
-        const userRole = req.user.role?.toLowerCase();
-        const isAdmin = ['super_admin'].includes(userRole);
+        const userRole = req.user.role?.toLowerCase() || '';
+        const isAdmin = ['super_admin', 'superadmin'].includes(userRole);
         const employeeId = req.user.employeeId;
 
         if (!employeeId) {
