@@ -109,8 +109,8 @@ const getApprovals = async (req, res, next) => {
         const status = req.query.status || 'Pending';
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 10;
-        // Admin/Principal/super_admin see all; others see only their approval queue
-        const isAdmin = ['Admin', 'Principal', 'super_admin'].includes(req.user.role);
+        const userRole = req.user.role ? req.user.role.toLowerCase() : '';
+        const isAdmin = ['super_admin', 'superadmin'].includes(userRole);
         const managerId = isAdmin ? null : req.user.employeeId;
 
         const data = await LeaveModel.getApprovals(managerId, status, page, limit);

@@ -114,9 +114,102 @@ const checkSubstitute = async (req, res, next) => {
     }
 };
 
+/**
+ * GET /api/approver-config/check-my-status
+ * Checks if the logged-in user is an approver of anybody or has admin privileges.
+ */
+const checkApproverStatus = async (req, res, next) => {
+    try {
+        const pool = require('../config/db');
+        const userRole = req.user.role ? req.user.role.toLowerCase() : '';
+        const isAdmin = ['super_admin', 'superadmin'].includes(userRole);
+        
+        if (isAdmin) {
+            return sendResponse(res, 200, 'Approver status checked', { isApprover: true, isAdmin: true });
+        }
+
+        const employeeId = req.user.employeeId || req.user.employee_id;
+        const userId = req.user.id || req.user.user_accounts_id;
+
+        if (!employeeId && !userId) {
+            return sendResponse(res, 200, 'Approver status checked', { isApprover: false, isAdmin: false });
+        }
+
+        let isApprover = false;
+
+        if (employeeId) {
+            // 1. Check reporting_manager_id in employee table
+            const [mgrRows] = await pool.execute(
+                'SELECT 1 FROM employee WHERE reporting_manager_id = ? LIMIT 1',
+                [employeeId]
+            );
+            if (mgrRows.length > 0) isApprover = true;
+
+            // 2. Check approver_config table
+            if (!isApprover) {
+                const [apprRows] = await pool.execute(
+                    'SELECT 1 FROM approver_config WHERE approver_1_id = ? OR approver_2_id = ? LIMIT 1',
+                    [employeeId, employeeId]
+                );
+                if (apprRows.length > 0) isApprover = true;
+            }
+
+            // 3. Check active delegations
+            if (!isApprover) {
+                const [delRows] = await pool.execute(
+                    'SELECT 1 FROM delegations WHERE delegatee_id = ? AND status = "active" AND (end_date IS NULL OR end_date >= CURDATE()) LIMIT 1',
+                    [employeeId]
+                );
+                if (delRows.length > 0) isApprover = true;
+            }
+
+            // 4. Check operation_approver_config
+            if (!isApprover) {
+                const [opsRows] = await pool.execute(
+                    'SELECT 1 FROM operation_approver_config WHERE approver_id = ? OR substitute_approver_id = ? LIMIT 1',
+                    [employeeId, employeeId]
+                );
+                if (opsRows.length > 0) isApprover = true;
+            }
+
+            // 5. Check if user is listed as approver_1 or approver_2 on any existing leave request
+            if (!isApprover) {
+                const [pendingLeave] = await pool.execute(
+                    'SELECT 1 FROM leave_requests WHERE (approver_1_id = ? OR approver_2_id = ?) LIMIT 1',
+                    [employeeId, employeeId]
+                );
+                if (pendingLeave.length > 0) isApprover = true;
+            }
+
+            // 6. Check if user is listed as approver_1 or approver_2 on any existing regularization request
+            if (!isApprover) {
+                const [pendingAdj] = await pool.execute(
+                    'SELECT 1 FROM attendance_regularization WHERE (approver_1_id = ? OR approver_2_id = ?) LIMIT 1',
+                    [employeeId, employeeId]
+                );
+                if (pendingAdj.length > 0) isApprover = true;
+            }
+        }
+
+        if (!isApprover && userId) {
+            // 7. Check workflow_config
+            const [wfRows] = await pool.execute(
+                'SELECT 1 FROM workflow_config WHERE assigned_to_user_id = ? LIMIT 1',
+                [userId]
+            );
+            if (wfRows.length > 0) isApprover = true;
+        }
+
+        sendResponse(res, 200, 'Approver status checked', { isApprover, isAdmin: false });
+    } catch (error) {
+        next(error);
+    }
+};
+
 module.exports = {
     getConfig,
     getConfigByType,
     saveConfig,
-    checkSubstitute
+    checkSubstitute,
+    checkApproverStatus
 };
