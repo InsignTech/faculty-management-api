@@ -17,7 +17,7 @@ const getAttendanceReport = async (req, res, next) => {
         }
 
         const userRole = (req.user.role || '').toLowerCase();
-        const isAdmin = ['admin', 'principal', 'super_admin'].includes(userRole);
+        const isAdmin = ['admin', 'principal', 'super_admin', 'operations manager', 'operations_manager'].includes(userRole);
         const reportData = await ReportModel.getAttendanceReport(req.user.employeeId, isAdmin, {
             startDate, endDate, employeeId, departmentId, search
         });
@@ -48,7 +48,7 @@ const exportAttendanceReport = async (req, res, next) => {
         }
 
         const userRole = (req.user.role || '').toLowerCase();
-        const isAdmin = ['admin', 'principal', 'super_admin'].includes(userRole);
+        const isAdmin = ['admin', 'principal', 'super_admin', 'operations manager', 'operations_manager'].includes(userRole);
         const reportData = await ReportModel.getAttendanceReport(req.user.employeeId, isAdmin, {
             startDate, endDate, employeeId, departmentId, search
         });
@@ -92,7 +92,7 @@ const getDeductionsReport = async (req, res, next) => {
         }
 
         const userRole = (req.user.role || '').toLowerCase();
-        const isAdmin = ['admin', 'principal', 'super_admin'].includes(userRole);
+        const isAdmin = ['admin', 'principal', 'super_admin', 'operations manager', 'operations_manager'].includes(userRole);
         const reportData = await ReportModel.getDeductionsReport(req.user.employeeId, isAdmin, {
             startDate, endDate, departmentId, search, filterType
         });
@@ -122,7 +122,7 @@ const exportDeductionsReport = async (req, res, next) => {
         }
 
         const userRole = (req.user.role || '').toLowerCase();
-        const isAdmin = ['admin', 'principal', 'super_admin'].includes(userRole);
+        const isAdmin = ['admin', 'principal', 'super_admin', 'operations manager', 'operations_manager'].includes(userRole);
         const reportData = await ReportModel.getDeductionsReport(req.user.employeeId, isAdmin, {
             startDate, endDate, departmentId, search, filterType
         });
