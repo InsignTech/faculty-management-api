@@ -77,6 +77,8 @@ class ReportModel {
                 MAX(IF(status = 'OnDuty', shift_type, NULL)) AS onduty_shift_type,
                 MAX(IF(status = 'Leave', 1, 0)) AS is_leave,
                 MAX(IF(status = 'Leave', shift_type, NULL)) AS leave_shift_type,
+                MAX(IF(shift_type = 'FirstHalf', status, NULL)) AS first_half_status,
+                MAX(IF(shift_type = 'SecondHalf', status, NULL)) AS second_half_status,
                 MIN(created_on) AS created_on
              FROM attendance 
              WHERE date BETWEEN ? AND ?
