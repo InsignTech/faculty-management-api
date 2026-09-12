@@ -19,8 +19,8 @@ router.get('/attendance/export', exportAttendanceReport);
 router.get('/deductions', getDeductionsReport);
 router.get('/deductions/export', exportDeductionsReport);
 
-// Super admin / Principal audit flow
-router.get('/leave-flow', authorize('super_admin', 'principal'), getLeaveFlowReport);
-router.get('/leave-flow/details', authorize('super_admin', 'principal'), getLeaveFlowDetails);
+// Super admin / Principal / Operations Manager audit flow
+router.get('/leave-flow', authorize('super_admin', 'principal', 'operations manager', 'operations_manager'), getLeaveFlowReport);
+router.get('/leave-flow/details', authorize('super_admin', 'principal', 'operations manager', 'operations_manager'), getLeaveFlowDetails);
 
 module.exports = router;
