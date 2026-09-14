@@ -20,8 +20,8 @@ router.get('/my-requests', getMyRequests);
 router.post('/apply', applyLeave);
 router.delete('/:id', deleteRequest);
 
-// Manager/Admin routes
-router.get('/approvals', authorize('Admin', 'Principal', 'HOD', 'super_admin'), getApprovals);
-router.put('/action/:id', authorize('Admin', 'Principal', 'HOD', 'super_admin'), actionRequest);
+// Manager/Admin/Approver routes
+router.get('/approvals', getApprovals);
+router.put('/action/:id', actionRequest);
 
 module.exports = router;

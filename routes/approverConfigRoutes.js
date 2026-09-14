@@ -3,12 +3,16 @@ const {
     getConfig,
     getConfigByType,
     saveConfig,
-    checkSubstitute
+    checkSubstitute,
+    checkApproverStatus
 } = require('../controllers/approverConfigController');
 const { protect, authorize } = require('../middleware/auth');
 const router = express.Router();
 
 router.use(protect);
+
+// Check if current user is an approver of anybody or admin
+router.get('/check-my-status', checkApproverStatus);
 
 // Get all approver configs for an employee
 router.get('/:employeeId', getConfig);

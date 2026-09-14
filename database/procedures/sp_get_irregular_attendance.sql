@@ -42,6 +42,16 @@ BEGIN
     WHERE employee_id = p_employee_id 
       AND MONTH(date) = p_month 
       AND YEAR(date) = p_year
+      AND (
+          date < CURDATE()
+          OR (
+              date = CURDATE()
+              AND EXISTS (
+                  SELECT 1 FROM attendance_process_log 
+                  WHERE process_date = CURDATE() AND status = 'Success'
+              )
+          )
+      )
       AND (deduction_days > 0 OR is_late = 1 OR is_early_leaving = 1)
       AND status NOT IN ('Leave', 'Regularized', 'OnDuty', 'WeekEnd', 'Public Holiday', 'Exceptional Holiday', 'Vacation')
     ORDER BY date DESC;

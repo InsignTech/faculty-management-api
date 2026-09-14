@@ -72,7 +72,17 @@ const getMyAttendanceSummary = async (req, res, next) => {
                 SUM(CASE WHEN status = 'Absent' AND shift_type = 'FullDay' THEN 1.0 WHEN status = 'Absent' AND shift_type IN ('FirstHalf', 'SecondHalf') THEN 0.5 ELSE 0.0 END) as absent_count,
                 SUM(CASE WHEN status = 'Regularized' AND shift_type = 'FullDay' THEN 1.0 WHEN status = 'Regularized' AND shift_type IN ('FirstHalf', 'SecondHalf') THEN 0.5 ELSE 0.0 END) as regularized_count
              FROM attendance 
-             WHERE employee_id = ? AND MONTH(date) = ? AND YEAR(date) = ?`,
+             WHERE employee_id = ? AND MONTH(date) = ? AND YEAR(date) = ?
+               AND (
+                   date < CURDATE()
+                   OR (
+                       date = CURDATE()
+                       AND EXISTS (
+                           SELECT 1 FROM attendance_process_log 
+                           WHERE process_date = CURDATE() AND status = 'Success'
+                       )
+                   )
+               )`,
             [targetEmpId, month, year]
         );
 
@@ -283,8 +293,8 @@ const getMyAdjustments = async (req, res, next) => {
 // @route   GET /api/attendance/pending-adjustments
 const getPendingAdjustments = async (req, res, next) => {
     try {
-        const userRole = req.user.role?.toLowerCase();
-        const isAdmin = ['super_admin'].includes(userRole);
+        const userRole = req.user.role?.toLowerCase() || '';
+        const isAdmin = ['super_admin', 'superadmin'].includes(userRole);
         const employeeId = req.user.employeeId;
 
         if (!employeeId) {
