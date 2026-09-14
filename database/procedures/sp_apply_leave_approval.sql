@@ -33,7 +33,9 @@ BEGIN
 
     date_loop: WHILE v_current_date <= v_end_date DO
         -- Rebuild the attendance record using standard daily process (which incorporates leave requests)
-        CALL sp_process_attendance_shiftwise(v_current_date);
+        IF v_current_date < CURDATE() OR (v_current_date = CURDATE() AND CURRENT_TIME() >= '19:00:00') THEN
+            CALL sp_process_attendance_shiftwise(v_current_date, v_emp_id);
+        END IF;
         SET v_current_date = DATE_ADD(v_current_date, INTERVAL 1 DAY);
     END WHILE;
 

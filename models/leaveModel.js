@@ -448,9 +448,15 @@ class LeaveModel {
             );
 
             // ── Phase 3: Rebuild attendance records using sp_process_attendance_shiftwise ──
+            const now = new Date();
+            const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+            const isPast7PM = now.getHours() >= 19;
+
             for (let d = new Date(start); d <= end; d = new Date(d.getTime() + msPerDay)) {
                 const dateStr = d.toISOString().split('T')[0];
-                await conn.execute('CALL sp_process_attendance_shiftwise(?)', [dateStr]);
+                if (dateStr < todayStr || (dateStr === todayStr && isPast7PM)) {
+                    await conn.execute('CALL sp_process_attendance_shiftwise(?, ?)', [dateStr, empId]);
+                }
             }
 
             await conn.commit();
@@ -522,13 +528,19 @@ class LeaveModel {
                 );
 
                 // Rebuild attendance using sp_process_attendance_shiftwise
+                const now = new Date();
+                const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+                const isPast7PM = now.getHours() >= 19;
+
                 const msPerDay = 24 * 60 * 60 * 1000;
                 const start = new Date(lr.start_date);
                 const end = new Date(lr.end_date);
 
                 for (let d = new Date(start); d <= end; d = new Date(d.getTime() + msPerDay)) {
                     const dateStr = d.toISOString().split('T')[0];
-                    await conn.execute('CALL sp_process_attendance_shiftwise(?)', [dateStr]);
+                    if (dateStr < todayStr || (dateStr === todayStr && isPast7PM)) {
+                        await conn.execute('CALL sp_process_attendance_shiftwise(?, ?)', [dateStr, lr.employee_id]);
+                    }
                 }
             } else {
                 // Just mark as Cancelled

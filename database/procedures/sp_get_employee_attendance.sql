@@ -49,6 +49,16 @@ BEGIN
     WHERE a.employee_id = p_employee_id
       AND MONTH(a.date) = p_month
       AND YEAR(a.date) = p_year
+      AND (
+          a.date < CURDATE()
+          OR (
+              a.date = CURDATE()
+              AND EXISTS (
+                  SELECT 1 FROM attendance_process_log 
+                  WHERE process_date = CURDATE() AND status = 'Success'
+              )
+          )
+      )
     GROUP BY a.employee_id, a.date
     ORDER BY a.date DESC;
 END ;;

@@ -123,6 +123,10 @@ class HolidayModel {
 
     // Trigger attendance rebuild for the holiday date range
     try {
+      const now = new Date();
+      const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      const isPast7PM = now.getHours() >= 19;
+
       const start = holiday_start_date;
       const end = holiday_end_date || holiday_start_date;
       const msPerDay = 24 * 60 * 60 * 1000;
@@ -130,7 +134,9 @@ class HolidayModel {
       const endDate = new Date(end);
       for (let d = new Date(startDate); d <= endDate; d = new Date(d.getTime() + msPerDay)) {
         const dateStr = d.toISOString().split('T')[0];
-        await pool.execute('CALL sp_process_attendance_shiftwise(?)', [dateStr]);
+        if (dateStr < todayStr || (dateStr === todayStr && isPast7PM)) {
+          await pool.execute('CALL sp_process_attendance_shiftwise(?, ?)', [dateStr, holiday_data.employee_id || null]);
+        }
       }
     } catch (err) {
       console.error('Failed to rebuild attendance after saving holiday:', err);
@@ -148,12 +154,18 @@ class HolidayModel {
 
     if (success) {
       try {
+        const now = new Date();
+        const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+        const isPast7PM = now.getHours() >= 19;
+
         const msPerDay = 24 * 60 * 60 * 1000;
         const startDate = new Date(holiday.holiday_start_date);
         const endDate = new Date(holiday.holiday_end_date);
         for (let d = new Date(startDate); d <= endDate; d = new Date(d.getTime() + msPerDay)) {
           const dateStr = d.toISOString().split('T')[0];
-          await pool.execute('CALL sp_process_attendance_shiftwise(?)', [dateStr]);
+          if (dateStr < todayStr || (dateStr === todayStr && isPast7PM)) {
+            await pool.execute('CALL sp_process_attendance_shiftwise(?, ?)', [dateStr, holiday.employee_id || null]);
+          }
         }
       } catch (err) {
         console.error('Failed to rebuild attendance after deleting holiday:', err);
@@ -284,9 +296,15 @@ class HolidayModel {
 
       // 3. Rebuild attendance for all affected dates
       if (uniqueDatesToRebuild.size > 0) {
+        const now = new Date();
+        const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+        const isPast7PM = now.getHours() >= 19;
+
         for (const dateStr of uniqueDatesToRebuild) {
           try {
-            await pool.execute('CALL sp_process_attendance_shiftwise(?)', [dateStr]);
+            if (dateStr < todayStr || (dateStr === todayStr && isPast7PM)) {
+              await pool.execute('CALL sp_process_attendance_shiftwise(?, ?)', [dateStr, null]);
+            }
           } catch (err) {
             console.error('Failed to rebuild attendance during clone for date:', dateStr, err);
           }

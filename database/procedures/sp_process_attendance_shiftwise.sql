@@ -2,7 +2,10 @@ DROP PROCEDURE IF EXISTS `sp_process_attendance_shiftwise`;
 
 DELIMITER $$
 
-CREATE PROCEDURE `sp_process_attendance_shiftwise`(IN p_date DATE)
+CREATE PROCEDURE `sp_process_attendance_shiftwise`(
+    IN p_date DATE,
+    IN p_employee_id INT
+)
 BEGIN
     DECLARE done INT DEFAULT FALSE;
     DECLARE v_emp_id INT;
@@ -40,7 +43,9 @@ BEGIN
     DECLARE v_sh_is_early TINYINT; DECLARE v_sh_early_mins INT;
 
     DECLARE emp_cursor CURSOR FOR
-        SELECT employee_id FROM employee WHERE active = 1;
+        SELECT employee_id FROM employee 
+        WHERE active = 1
+          AND (p_employee_id IS NULL OR p_employee_id = 0 OR employee_id = p_employee_id);
 
     DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = TRUE;
 

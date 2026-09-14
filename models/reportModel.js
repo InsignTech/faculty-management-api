@@ -82,6 +82,16 @@ class ReportModel {
                 MIN(created_on) AS created_on
              FROM attendance 
              WHERE date BETWEEN ? AND ?
+               AND (
+                   date < CURDATE()
+                   OR (
+                       date = CURDATE()
+                       AND EXISTS (
+                           SELECT 1 FROM attendance_process_log 
+                           WHERE process_date = CURDATE() AND status = 'Success'
+                       )
+                   )
+               )
              GROUP BY employee_id, date`,
             [startDate, endDate]
         );
@@ -102,7 +112,28 @@ class ReportModel {
             [endDate, startDate]
         );
 
-        // 3. Process the matrix
+        // 3. Process the matrix (Cap at yesterday or today if today's nightly job completed)
+        const [todayLog] = await pool.execute(
+            "SELECT 1 FROM attendance_process_log WHERE process_date = CURDATE() AND status = 'Success'"
+        );
+        const isTodayProcessed = todayLog.length > 0;
+
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = String(now.getMonth() + 1).padStart(2, '0');
+        const day = String(now.getDate()).padStart(2, '0');
+        const todayStr = `${year}-${month}-${day}`;
+
+        let maxAllowedDateStr = todayStr;
+        if (!isTodayProcessed) {
+            const yesterday = new Date(now);
+            yesterday.setDate(yesterday.getDate() - 1);
+            const yYear = yesterday.getFullYear();
+            const yMonth = String(yesterday.getMonth() + 1).padStart(2, '0');
+            const yDay = String(yesterday.getDate()).padStart(2, '0');
+            maxAllowedDateStr = `${yYear}-${yMonth}-${yDay}`;
+        }
+
         const report = [];
         const start = new Date(startDate);
         const end = new Date(endDate);
@@ -110,6 +141,9 @@ class ReportModel {
         let curr = new Date(start);
         while (curr <= end) {
             const dateStr = curr.toISOString().split('T')[0];
+            if (dateStr > maxAllowedDateStr) {
+                break;
+            }
 
             for (const emp of employees) {
                 const dayAttendance = attendance.find(a => {
@@ -387,6 +421,16 @@ class ReportModel {
                   )
             ) AS combined
             WHERE combined.date BETWEEN ? AND ?
+              AND (
+                  combined.date < CURDATE()
+                  OR (
+                      combined.date = CURDATE()
+                      AND EXISTS (
+                          SELECT 1 FROM attendance_process_log 
+                          WHERE process_date = CURDATE() AND status = 'Success'
+                      )
+                  )
+              )
         `;
 
         const params = [startDate, endDate];

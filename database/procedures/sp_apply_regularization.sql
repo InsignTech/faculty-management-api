@@ -28,7 +28,9 @@ BEGIN
     WHERE  id = p_reg_id;
 
     -- Rebuild the attendance record(s) using the daily process (which incorporates regularizations)
-    CALL sp_process_attendance_shiftwise(v_date);
+    IF v_date < CURDATE() OR (v_date = CURDATE() AND CURRENT_TIME() >= '19:00:00') THEN
+        CALL sp_process_attendance_shiftwise(v_date, v_emp_id);
+    END IF;
 
 END ;;
 DELIMITER ;

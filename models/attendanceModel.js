@@ -5,7 +5,7 @@ const SettingsModel = require('./settingsModel');
 class AttendanceModel {
     // Process raw logs for a specific date
     static async processLogs(date) {
-        const [rows] = await pool.execute('CALL sp_process_attendance_shiftwise(?)', [date]);
+        const [rows] = await pool.execute('CALL sp_process_attendance_shiftwise(?, ?)', [date, null]);
         return rows[0][0];
     }
 
@@ -71,13 +71,20 @@ class AttendanceModel {
             }
 
             // 3. Add all sequential missing days up to today
+            const now = new Date();
+            const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+            const isPast7PM = now.getHours() >= 19;
+
             let currentDate = new Date(startDate);
             while (currentDate <= today) {
                 const year = currentDate.getFullYear();
                 const month = String(currentDate.getMonth() + 1).padStart(2, '0');
                 const day = String(currentDate.getDate()).padStart(2, '0');
                 const dateStr = `${year}-${month}-${day}`;
-                datesToProcess.add(dateStr);
+                
+                if (dateStr < todayStr || (dateStr === todayStr && isPast7PM)) {
+                    datesToProcess.add(dateStr);
+                }
                 currentDate.setDate(currentDate.getDate() + 1);
             }
         } catch (error) {
@@ -93,7 +100,7 @@ class AttendanceModel {
         for (const dateStr of sortedDates) {
             try {
                 // Execute stored procedure
-                const [resultRows] = await pool.execute('CALL sp_process_attendance_shiftwise(?)', [dateStr]);
+                const [resultRows] = await pool.execute('CALL sp_process_attendance_shiftwise(?, ?)', [dateStr, null]);
                 const rowsProcessed = resultRows[0]?.[0]?.processed_rows || 0;
 
                 totalProcessed += rowsProcessed;
@@ -667,9 +674,14 @@ class AttendanceModel {
                 }
 
                 // Rebuild attendance state for each unique date in the batch
+                const now = new Date();
+                const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+                const isPast7PM = now.getHours() >= 19;
                 const uniqueDates = [...new Set(pendingRows.map(r => new Date(r.date).toISOString().split('T')[0]))];
                 for (const d of uniqueDates) {
-                    await conn.execute('CALL sp_process_attendance_shiftwise(?)', [d]);
+                    if (d < todayStr || (d === todayStr && isPast7PM)) {
+                        await conn.execute('CALL sp_process_attendance_shiftwise(?, ?)', [d, representative.employee_id]);
+                    }
                 }
 
                 await conn.commit();
@@ -1249,7 +1261,7 @@ class AttendanceModel {
                     // 2. Try to re-process logs for this date.
                     // If logs exist, it will recreate a 'Present' record.
                     try {
-                        await conn.execute('CALL sp_process_attendance_shiftwise(?)', [d]);
+                        await conn.execute('CALL sp_process_attendance_shiftwise(?, ?)', [d, employeeId]);
                     } catch (e) {
                         console.error(`Failed to re-process attendance for ${d} during leave reversal:`, e);
                     }
