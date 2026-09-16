@@ -126,7 +126,7 @@ const cancelLeaveRequest = async (req, res, next) => {
 
     // Fetch the request and the requester's manager info
     const [rows] = await pool.execute(
-      'SELECT status, employee_id, start_date, end_date FROM leave_requests WHERE leave_request_id = ?',
+      'SELECT status, employee_id, applied_by_id, is_proxy FROM leave_requests WHERE leave_request_id = ?',
       [id]
     );
 
@@ -146,18 +146,27 @@ const cancelLeaveRequest = async (req, res, next) => {
     );
     const isManager = managerCheck.length > 0;
 
-    // Check if it's their own request
+    // Check if it's their own request or applied by proxy or user has active delegation
     const isOwner = request.employee_id === employeeId;
+    const isAppliedByProxy = request.applied_by_id === employeeId;
 
-    if (!isOwner && !isAdmin && !isManager) {
+    let isDelegated = false;
+    if (!isOwner && !isAppliedByProxy && employeeId && request.employee_id) {
+      const DelegationModel = require('../models/delegationModel');
+      isDelegated = await DelegationModel.checkDelegationExists(employeeId, request.employee_id);
+    }
+
+    const isAuthorizedUser = isOwner || isAppliedByProxy || isDelegated;
+
+    if (!isAuthorizedUser && !isAdmin && !isManager) {
       return res.status(403).json({ success: false, message: 'You are not authorized to cancel this request' });
     }
 
     // Status logic:
-    // Owners can only cancel PENDING requests.
+    // Owners/Proxies can only cancel PENDING requests.
     // Managers/Admins can cancel PENDING or APPROVED requests.
-    if (isOwner && !isAdmin && !isManager && request.status !== 'Pending') {
-      return res.status(400).json({ success: false, message: 'You can only cancel your own pending requests. For approved leaves, please contact your manager.' });
+    if (isAuthorizedUser && !isAdmin && !isManager && request.status !== 'Pending') {
+      return res.status(400).json({ success: false, message: 'You can only cancel pending requests. For approved leaves, please contact your manager.' });
     }
 
     if (request.status === 'Rejected' || request.status === 'Cancelled') {
