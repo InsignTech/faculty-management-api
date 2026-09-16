@@ -454,6 +454,11 @@ class PayrollModel {
         }
     }
 
+    static async getDisbursementById(id) {
+        const [rows] = await pool.execute('SELECT * FROM salary_disbursement WHERE disbursement_id = ?', [id]);
+        return rows[0] || null;
+    }
+
     static async updateDisbursement(id, data, updatedBy) {
         const { basic_pay, hra, educational_allowance, special_allowance, naac_allowance, lop_days, tds, loan_emi, bus_fee } = data;
 

@@ -485,9 +485,34 @@ const getLopDetails = async (req, res, next) => {
 const updateDisbursement = async (req, res, next) => {
     try {
         const actionBy = req.user?.employeeId || 999;
-        const affected = await PayrollModel.updateDisbursement(req.params.id, req.body, actionBy);
-        if (affected === 0) return next(new ErrorResponse('Disbursement not found', 404));
-        sendResponse(res, 200, 'Disbursement updated successfully');
+        const requesterId = req.user?.employeeId || req.user?.employee_id;
+        const disbId = req.params.id;
+
+        const originalData = await PayrollModel.getDisbursementById(disbId);
+
+        const execute = async () => {
+            const affected = await PayrollModel.updateDisbursement(disbId, req.body, actionBy);
+            if (affected === 0) throw new ErrorResponse('Disbursement not found', 404);
+            return { disbursement_id: disbId };
+        };
+
+        const interceptResult = await interceptApproval({
+            requestType: 'PAYROLL',
+            actionType: 'UPDATE',
+            entityId: disbId,
+            requestedData: { subtype: 'DISBURSEMENT', payload: req.body, actionBy },
+            originalData: { subtype: 'DISBURSEMENT', payload: originalData },
+            requesterId,
+            requesterRole: req.user?.role,
+            user: req.user,
+            executeCallback: execute
+        });
+
+        if (interceptResult.pendingApproval) {
+            return sendResponse(res, 202, interceptResult.message, { pendingApproval: true });
+        }
+
+        sendResponse(res, 200, 'Disbursement updated successfully', interceptResult.result);
     } catch (e) { next(e); }
 };
 
