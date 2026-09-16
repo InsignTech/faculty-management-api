@@ -454,6 +454,28 @@ class PayrollModel {
         }
     }
 
+    static async getDisbursementById(id) {
+        const [rows] = await pool.execute('SELECT * FROM salary_disbursement WHERE disbursement_id = ?', [id]);
+        if (rows.length === 0) return null;
+
+        const item = rows[0];
+        const dec = typeof item.deductions_json === 'string'
+            ? JSON.parse(item.deductions_json)
+            : (item.deductions_json || {});
+
+        return {
+            basic_pay: parseFloat(item.basic_pay || 0),
+            hra: parseFloat(item.hra || 0),
+            educational_allowance: parseFloat(item.educational_allowance || 0),
+            special_allowance: parseFloat(item.special_allowance || 0),
+            naac_allowance: parseFloat(item.naac_allowance || 0),
+            lop_days: parseFloat(item.lop_days || 0),
+            tds: parseFloat(dec.TDS ?? dec.tds ?? 0),
+            loan_emi: parseFloat(dec.LoanEMI ?? dec.loan_emi ?? 0),
+            bus_fee: parseFloat(dec.BusFee ?? dec.bus_fee ?? 0)
+        };
+    }
+
     static async updateDisbursement(id, data, updatedBy) {
         const { basic_pay, hra, educational_allowance, special_allowance, naac_allowance, lop_days, tds, loan_emi, bus_fee } = data;
 

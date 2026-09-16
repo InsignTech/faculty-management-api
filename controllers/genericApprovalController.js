@@ -151,6 +151,9 @@ const actionApproval = async (req, res, next) => {
                 await PayrollModel.saveTdsConfig(entityId, payload);
             } else if (subtype === 'BANK_ACCOUNT') {
                 await PayrollModel.saveBankAccount(entityId, payload);
+            } else if (subtype === 'DISBURSEMENT') {
+                const { actionBy } = requestedData;
+                await PayrollModel.updateDisbursement(entityId, payload, actionBy || loggedInEmpId);
             }
         } else if (requestType === 'HOLIDAY') {
             if (actionType === 'CREATE' || actionType === 'UPDATE') {

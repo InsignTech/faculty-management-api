@@ -31,11 +31,11 @@ async function interceptApproval({
     user = null,
     executeCallback
 }) {
-    // 0. Super Admin check: Super admin does NOT need any approvals - changes go directly
+    // 0. Executive bypass check: ONLY Super Admin does NOT need any approvals - changes execute directly
     const roleName = (requesterRole || user?.role || '').toLowerCase().trim();
-    let isSuperAdmin = ['super_admin', 'superadmin', 'super admin'].includes(roleName);
+    let isBypassRole = ['super_admin', 'superadmin', 'super admin'].includes(roleName);
 
-    if (!isSuperAdmin && (requesterId || user?.id)) {
+    if (!isBypassRole && (requesterId || user?.id)) {
         try {
             const checkId = user?.id || requesterId;
             const [userRows] = await pool.query(
@@ -46,14 +46,14 @@ async function interceptApproval({
                 [checkId, checkId]
             );
             if (userRows.length > 0 && ['super_admin', 'superadmin', 'super admin'].includes((userRows[0].role || '').toLowerCase().trim())) {
-                isSuperAdmin = true;
+                isBypassRole = true;
             }
         } catch (err) {
-            console.error('Error checking superadmin status in interceptApproval:', err.message);
+            console.error('Error checking executive bypass status in interceptApproval:', err.message);
         }
     }
 
-    if (isSuperAdmin) {
+    if (isBypassRole) {
         const result = await executeCallback();
         return { pendingApproval: false, result };
     }

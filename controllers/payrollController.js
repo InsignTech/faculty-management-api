@@ -485,9 +485,46 @@ const getLopDetails = async (req, res, next) => {
 const updateDisbursement = async (req, res, next) => {
     try {
         const actionBy = req.user?.employeeId || 999;
-        const affected = await PayrollModel.updateDisbursement(req.params.id, req.body, actionBy);
-        if (affected === 0) return next(new ErrorResponse('Disbursement not found', 404));
-        sendResponse(res, 200, 'Disbursement updated successfully');
+        const requesterId = req.user?.employeeId || req.user?.employee_id;
+        const disbId = req.params.id;
+
+        const originalData = await PayrollModel.getDisbursementById(disbId);
+
+        const normalizedPayload = {
+            basic_pay: parseFloat(req.body.basic_pay || 0),
+            hra: parseFloat(req.body.hra || 0),
+            educational_allowance: parseFloat(req.body.educational_allowance || 0),
+            special_allowance: parseFloat(req.body.special_allowance || 0),
+            naac_allowance: parseFloat(req.body.naac_allowance || 0),
+            lop_days: parseFloat(req.body.lop_days || 0),
+            tds: parseFloat(req.body.tds || 0),
+            loan_emi: parseFloat(req.body.loan_emi || 0),
+            bus_fee: parseFloat(req.body.bus_fee || 0)
+        };
+
+        const execute = async () => {
+            const affected = await PayrollModel.updateDisbursement(disbId, normalizedPayload, actionBy);
+            if (affected === 0) throw new ErrorResponse('Disbursement not found', 404);
+            return { disbursement_id: disbId };
+        };
+
+        const interceptResult = await interceptApproval({
+            requestType: 'PAYROLL',
+            actionType: 'UPDATE',
+            entityId: disbId,
+            requestedData: { subtype: 'DISBURSEMENT', payload: normalizedPayload, actionBy },
+            originalData: { subtype: 'DISBURSEMENT', payload: originalData },
+            requesterId,
+            requesterRole: req.user?.role,
+            user: req.user,
+            executeCallback: execute
+        });
+
+        if (interceptResult.pendingApproval) {
+            return sendResponse(res, 202, interceptResult.message, { pendingApproval: true });
+        }
+
+        sendResponse(res, 200, 'Disbursement updated successfully', interceptResult.result);
     } catch (e) { next(e); }
 };
 
