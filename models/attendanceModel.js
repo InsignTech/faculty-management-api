@@ -751,23 +751,48 @@ class AttendanceModel {
     }
 
     // Delete a pending adjustment batch (or single record)
-    static async deleteBatchAdjustment(batchIdentifier, employeeId) {
+    static async deleteBatchAdjustment(batchIdentifier, cancellerId, userRole = '') {
         const { batchId, rows: adjRows } = await this._resolveBatchRows(pool, batchIdentifier);
-        const pendingUserRows = adjRows.filter(r => r.status === 'Pending' && r.employee_id === Number(employeeId));
-        if (!pendingUserRows.length) {
+        if (!adjRows || !adjRows.length) {
             return { affected_rows: 0 };
         }
-        const [rows] = await pool.execute(
-            `DELETE FROM attendance_regularization 
-             WHERE batch_id = ? AND employee_id = ? AND status = 'Pending'`,
-            [batchId, employeeId]
+
+        const roleLower = String(userRole || '').toLowerCase();
+        const isAdmin = ['super_admin', 'admin', 'principal', 'hod', 'manager'].includes(roleLower);
+        const DelegationModel = require('./delegationModel');
+
+        const pendingAuthorizedRows = [];
+        for (const r of adjRows) {
+            if (r.status !== 'Pending') continue;
+
+            const isOwner = Number(r.employee_id) === Number(cancellerId);
+            const isAppliedByProxy = Number(r.applied_by_id) === Number(cancellerId);
+
+            let isDelegated = false;
+            if (!isOwner && !isAppliedByProxy && cancellerId && r.employee_id) {
+                isDelegated = await DelegationModel.checkDelegationExists(cancellerId, r.employee_id);
+            }
+
+            if (isOwner || isAppliedByProxy || isDelegated || isAdmin) {
+                pendingAuthorizedRows.push(r);
+            }
+        }
+
+        if (!pendingAuthorizedRows.length) {
+            return { affected_rows: 0 };
+        }
+
+        const idsToDelete = pendingAuthorizedRows.map(r => r.id);
+        const [result] = await pool.query(
+            `DELETE FROM attendance_regularization WHERE id IN (?)`,
+            [idsToDelete]
         );
-        return { affected_rows: rows.affectedRows };
+        return { affected_rows: result.affectedRows };
     }
 
     // Delete a pending adjustment (delegates to deleteBatchAdjustment)
-    static async deleteAdjustment(adjustmentId, employeeId) {
-        return this.deleteBatchAdjustment(adjustmentId, employeeId);
+    static async deleteAdjustment(adjustmentId, employeeId, userRole = '') {
+        return this.deleteBatchAdjustment(adjustmentId, employeeId, userRole);
     }
 
     // Get adjustment history for an employee with filters (aggregated by batch)
