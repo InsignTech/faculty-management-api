@@ -490,8 +490,20 @@ const updateDisbursement = async (req, res, next) => {
 
         const originalData = await PayrollModel.getDisbursementById(disbId);
 
+        const normalizedPayload = {
+            basic_pay: parseFloat(req.body.basic_pay || 0),
+            hra: parseFloat(req.body.hra || 0),
+            educational_allowance: parseFloat(req.body.educational_allowance || 0),
+            special_allowance: parseFloat(req.body.special_allowance || 0),
+            naac_allowance: parseFloat(req.body.naac_allowance || 0),
+            lop_days: parseFloat(req.body.lop_days || 0),
+            tds: parseFloat(req.body.tds || 0),
+            loan_emi: parseFloat(req.body.loan_emi || 0),
+            bus_fee: parseFloat(req.body.bus_fee || 0)
+        };
+
         const execute = async () => {
-            const affected = await PayrollModel.updateDisbursement(disbId, req.body, actionBy);
+            const affected = await PayrollModel.updateDisbursement(disbId, normalizedPayload, actionBy);
             if (affected === 0) throw new ErrorResponse('Disbursement not found', 404);
             return { disbursement_id: disbId };
         };
@@ -500,7 +512,7 @@ const updateDisbursement = async (req, res, next) => {
             requestType: 'PAYROLL',
             actionType: 'UPDATE',
             entityId: disbId,
-            requestedData: { subtype: 'DISBURSEMENT', payload: req.body, actionBy },
+            requestedData: { subtype: 'DISBURSEMENT', payload: normalizedPayload, actionBy },
             originalData: { subtype: 'DISBURSEMENT', payload: originalData },
             requesterId,
             requesterRole: req.user?.role,
