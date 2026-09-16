@@ -53,20 +53,18 @@ BEGIN
         remarks = CASE WHEN p_action = 'paid' THEN p_remarks ELSE remarks END
     WHERE period_id = p_period_id;
     
-    -- Update loan balances and mark as paid if action is paid
+    -- Update loan balances and mark as closed if action is paid
     IF p_action = 'paid' THEN
-        -- Loop over disbursements for this period and update loans
-        -- We will do a bulk update:
         UPDATE employee_loan el
         JOIN (
             SELECT sd.employee_id, 
-                   JSON_UNQUOTE(JSON_EXTRACT(sd.deductions_json, '$.LoanEMI')) AS loan_emi
+                   CAST(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(sd.deductions_json, '$.LoanEMI')), '0') AS DECIMAL(15,2)) AS loan_emi
             FROM salary_disbursement sd
             WHERE sd.period_id = p_period_id
         ) sub ON el.employee_id = sub.employee_id
-        SET el.total_paid_amount = el.total_paid_amount + CAST(sub.loan_emi AS DECIMAL(15,2)),
-            el.status = CASE WHEN el.total_paid_amount + CAST(sub.loan_emi AS DECIMAL(15,2)) >= el.loan_amount THEN 'closed' ELSE el.status END
-        WHERE el.status = 'active' AND CAST(sub.loan_emi AS DECIMAL(15,2)) > 0;
+        SET el.total_paid_amount = LEAST(el.loan_amount, el.total_paid_amount + sub.loan_emi),
+            el.status = CASE WHEN (el.total_paid_amount + sub.loan_emi) >= el.loan_amount THEN 'closed' ELSE 'active' END
+        WHERE (el.status = 'active' OR el.status = 'approved') AND sub.loan_emi > 0;
     END IF;
     
     -- Insert into approval logs for tracking

@@ -589,7 +589,7 @@ class PayrollModel {
                      ORDER BY min_salary DESC LIMIT 1`,
                     [projectedPay, projectedPay]
                 );
-                pt_amount = ptRows[0]?.pt_amount || 0;
+                pt_amount = parseFloat(ptRows[0]?.pt_amount || 0);
             }
         }
 
@@ -604,8 +604,15 @@ class PayrollModel {
             }
         }
 
-        // Total Deductions
-        const total_deduction = epf_amount + esi_amount + final_tds + pt_amount + parseFloat(loan_emi || 0) + final_bus_fee;
+        // Total Deductions (Ensure all operands are numbers to avoid string concatenation)
+        const total_deduction = Math.round((
+            parseFloat(epf_amount || 0) +
+            parseFloat(esi_amount || 0) +
+            parseFloat(final_tds || 0) +
+            parseFloat(pt_amount || 0) +
+            parseFloat(loan_emi || 0) +
+            parseFloat(final_bus_fee || 0)
+        ) * 100) / 100;
 
         const net_salary = Math.max(0, payable_amount - total_deduction);
 

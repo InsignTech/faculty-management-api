@@ -152,13 +152,59 @@ const actionRequest = async (req, res, next) => {
 // @route   DELETE /api/leaves/:id
 const deleteRequest = async (req, res, next) => {
     try {
-        const result = await LeaveModel.cancel(req.params.id, req.user.employeeId, req.user.role);
+        const { id } = req.params;
+        const employeeId = req.user?.employeeId;
+        const userRole = req.user?.role;
+
+        const [rows] = await pool.execute(
+            'SELECT status, employee_id, applied_by_id, is_proxy FROM leave_requests WHERE leave_request_id = ?',
+            [id]
+        );
+
+        if (rows.length === 0) {
+            return next(new ErrorResponse('Leave request not found', 404));
+        }
+
+        const request = rows[0];
+
+        const isAdmin = ['super_admin', 'admin', 'Admin', 'Principal', 'principal', 'HOD', 'Manager'].includes(userRole);
+
+        const [managerCheck] = await pool.execute(
+            'SELECT 1 FROM employee WHERE employee_id = ? AND reporting_manager_id = ?',
+            [request.employee_id, employeeId]
+        );
+        const isManager = managerCheck.length > 0;
+
+        const isOwner = request.employee_id === employeeId;
+        const isAppliedByProxy = request.applied_by_id === employeeId;
+
+        let isDelegated = false;
+        if (!isOwner && !isAppliedByProxy && employeeId && request.employee_id) {
+            const DelegationModel = require('../models/delegationModel');
+            isDelegated = await DelegationModel.checkDelegationExists(employeeId, request.employee_id);
+        }
+
+        const isAuthorizedUser = isOwner || isAppliedByProxy || isDelegated;
+
+        if (!isAuthorizedUser && !isAdmin && !isManager) {
+            return next(new ErrorResponse('You are not authorized to cancel this request', 403));
+        }
+
+        if (isAuthorizedUser && !isAdmin && !isManager && request.status !== 'Pending') {
+            return next(new ErrorResponse('You can only cancel pending requests. For approved leaves, please contact your manager.', 400));
+        }
+
+        if (request.status === 'Rejected' || request.status === 'Cancelled') {
+            return next(new ErrorResponse(`Cannot cancel a request that is already ${request.status}`, 400));
+        }
+
+        const result = await LeaveModel.cancel(id, employeeId);
 
         if (result?.affected_rows === 0) {
             return next(new ErrorResponse(result.message || 'Request not found', 404));
         }
 
-        sendResponse(res, 200, 'Leave request cancelled successfully');
+        sendResponse(res, 200, 'Leave request cancelled successfully', result);
     } catch (error) {
         if (error.message?.includes('Not authorized') || error.message?.includes('only cancel')) {
             return next(new ErrorResponse(error.message, 403));

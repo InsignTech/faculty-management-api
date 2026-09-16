@@ -449,7 +449,8 @@ const deleteAdjustment = async (req, res, next) => {
     try {
         const { id } = req.params;
         const employeeId = req.user.employeeId;
-        const result = await AttendanceModel.deleteBatchAdjustment(id, employeeId);
+        const userRole = req.user.role;
+        const result = await AttendanceModel.deleteBatchAdjustment(id, employeeId, userRole);
 
         if (result.affected_rows === 0) {
             return next(new ErrorResponse('Adjustment not found or is already processed', 404));
@@ -463,7 +464,8 @@ const deleteBatchAdjustment = async (req, res, next) => {
     try {
         const { batchId } = req.params;
         const employeeId = req.user.employeeId;
-        const result = await AttendanceModel.deleteBatchAdjustment(batchId, employeeId);
+        const userRole = req.user.role;
+        const result = await AttendanceModel.deleteBatchAdjustment(batchId, employeeId, userRole);
 
         if (result.affected_rows === 0) {
             return next(new ErrorResponse('Adjustment not found or is already processed', 404));
