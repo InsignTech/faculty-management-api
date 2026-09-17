@@ -260,9 +260,13 @@ class ReportModel {
                     remark: remark,
                     punch_in: dayAttendance ? dayAttendance.first_in_time : null,
                     punch_out: dayAttendance ? dayAttendance.last_out_time : null,
+                    first_in_time: dayAttendance ? dayAttendance.first_in_time : null,
+                    last_out_time: dayAttendance ? dayAttendance.last_out_time : null,
                     worked_mins: dayAttendance ? dayAttendance.worked_mins : 0,
                     late_minutes: dayAttendance ? dayAttendance.late_minutes : 0,
                     early_minutes: dayAttendance ? dayAttendance.early_minutes : 0,
+                    is_late: dayAttendance ? dayAttendance.is_late : 0,
+                    is_early_leaving: dayAttendance ? dayAttendance.is_early_leaving : 0,
                     overtime_minutes: dayAttendance ? dayAttendance.overtime_minutes : 0,
                     deduction_days: dayAttendance ? parseFloat(dayAttendance.deduction_days) : (status === 'Absent' ? 1.00 : (status.includes('Half Absent') ? 0.50 : 0.00)),
                     shift_type: dayAttendance ? dayAttendance.shift_type : null,
@@ -270,7 +274,9 @@ class ReportModel {
                     onduty_shift_type: dayAttendance ? dayAttendance.onduty_shift_type : null,
                     is_leave: dayAttendance ? (dayAttendance.is_leave || (dayAttendance.leave_shift_type ? 1 : 0)) : (empLeave ? 1 : 0),
                     is_leave_type: empLeave ? empLeave.leave_type : (dayAttendance && dayAttendance.status === 'Leave' ? 'Leave' : null),
-                    leave_shift_type: dayAttendance ? dayAttendance.leave_shift_type : (empLeave ? empLeave.leave_half_type : null)
+                    leave_shift_type: dayAttendance ? dayAttendance.leave_shift_type : (empLeave ? empLeave.leave_half_type : null),
+                    first_half_status: dayAttendance ? dayAttendance.first_half_status : null,
+                    second_half_status: dayAttendance ? dayAttendance.second_half_status : null
                 });
             }
             curr.setDate(curr.getDate() + 1);
