@@ -73,10 +73,10 @@ class ReportModel {
                 SUM(overtime_minutes) AS overtime_minutes,
                 SUM(deduction_days) AS deduction_days,
                 MAX(is_worked_on_holiday) AS is_worked_on_holiday,
-                MAX(IF(status = 'Regularized', shift_type, NULL)) AS regularization_shift_type,
-                MAX(IF(status = 'OnDuty', shift_type, NULL)) AS onduty_shift_type,
+                IF(COUNT(DISTINCT IF(status = 'Regularized', shift_type, NULL)) > 1, 'FullDay', MAX(IF(status = 'Regularized', shift_type, NULL))) AS regularization_shift_type,
+                IF(COUNT(DISTINCT IF(status = 'OnDuty', shift_type, NULL)) > 1, 'FullDay', MAX(IF(status = 'OnDuty', shift_type, NULL))) AS onduty_shift_type,
                 MAX(IF(status = 'Leave', 1, 0)) AS is_leave,
-                MAX(IF(status = 'Leave', shift_type, NULL)) AS leave_shift_type,
+                IF(COUNT(DISTINCT IF(status = 'Leave', shift_type, NULL)) > 1, 'FullDay', MAX(IF(status = 'Leave', shift_type, NULL))) AS leave_shift_type,
                 MAX(IF(shift_type = 'FirstHalf', status, NULL)) AS first_half_status,
                 MAX(IF(shift_type = 'SecondHalf', status, NULL)) AS second_half_status,
                 MIN(created_on) AS created_on
