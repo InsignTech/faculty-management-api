@@ -116,6 +116,26 @@ BEGIN
                  0.00, v_worked_on_holiday);
 
             -- Overrides can still apply on a holiday date (e.g. a leave request logged that day)
+            IF (SELECT COUNT(*) FROM attendance WHERE employee_id = v_emp_id AND date = p_date AND shift_type = 'FullDay') = 1 THEN
+                IF EXISTS (
+                    SELECT 1 FROM attendance_regularization 
+                    WHERE employee_id = v_emp_id AND date = p_date AND status = 'Approved' 
+                      AND regularization_shift_type IN ('FirstHalf', 'SecondHalf')
+                ) OR EXISTS (
+                    SELECT 1 FROM leave_requests 
+                    WHERE employee_id = v_emp_id AND p_date BETWEEN start_date AND end_date AND status = 'Approved' 
+                      AND leave_half_type IN ('FirstHalf', 'SecondHalf')
+                ) THEN
+                    DELETE FROM attendance WHERE employee_id = v_emp_id AND date = p_date AND shift_type = 'FullDay';
+
+                    INSERT INTO attendance
+                        (employee_id, date, first_in_time, last_out_time, worked_mins, shift_type, status, deduction_days, is_worked_on_holiday)
+                    VALUES
+                        (v_emp_id, p_date, v_first_in, v_last_out, ROUND(v_worked_mins / 2), 'FirstHalf', v_holiday_type, 0.00, v_worked_on_holiday),
+                        (v_emp_id, p_date, v_first_in, v_last_out, ROUND(v_worked_mins / 2), 'SecondHalf', v_holiday_type, 0.00, v_worked_on_holiday);
+                END IF;
+            END IF;
+
             UPDATE attendance a
             JOIN attendance_regularization r
               ON a.employee_id = r.employee_id AND a.date = r.date
@@ -332,6 +352,28 @@ BEGIN
         -- ============================================================
         -- 5. OVERRIDES (Regularization & Leave)
         -- ============================================================
+        -- If attendance has a single FullDay row, but an approved half-day regularization or leave request exists,
+        -- split the FullDay row into FirstHalf and SecondHalf rows so half-day overrides apply correctly.
+        IF (SELECT COUNT(*) FROM attendance WHERE employee_id = v_emp_id AND date = p_date AND shift_type = 'FullDay') = 1 THEN
+            IF EXISTS (
+                SELECT 1 FROM attendance_regularization 
+                WHERE employee_id = v_emp_id AND date = p_date AND status = 'Approved' 
+                  AND regularization_shift_type IN ('FirstHalf', 'SecondHalf')
+            ) OR EXISTS (
+                SELECT 1 FROM leave_requests 
+                WHERE employee_id = v_emp_id AND p_date BETWEEN start_date AND end_date AND status = 'Approved' 
+                  AND leave_half_type IN ('FirstHalf', 'SecondHalf')
+            ) THEN
+                DELETE FROM attendance WHERE employee_id = v_emp_id AND date = p_date AND shift_type = 'FullDay';
+
+                INSERT INTO attendance
+                    (employee_id, date, first_in_time, last_out_time, worked_mins, shift_type, status, deduction_days)
+                VALUES
+                    (v_emp_id, p_date, v_first_in, v_last_out, ROUND(v_worked_mins / 2), 'FirstHalf', 'Absent', 0.50),
+                    (v_emp_id, p_date, v_first_in, v_last_out, ROUND(v_worked_mins / 2), 'SecondHalf', 'Absent', 0.50);
+            END IF;
+        END IF;
+
         UPDATE attendance a
         JOIN attendance_regularization r
           ON a.employee_id = r.employee_id AND a.date = r.date

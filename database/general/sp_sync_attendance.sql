@@ -300,6 +300,26 @@ BEGIN
         -- ============================================================
         -- 4. OVERRIDE: Regularization (approved, matching shift_type or FullDay)
         -- ============================================================
+        IF (SELECT COUNT(*) FROM attendance WHERE employee_id = v_emp_id AND date = v_date AND shift_type = 'FullDay') = 1 THEN
+            IF EXISTS (
+                SELECT 1 FROM attendance_regularization 
+                WHERE employee_id = v_emp_id AND date = v_date AND status = 'Approved' 
+                  AND regularization_shift_type IN ('FirstHalf', 'SecondHalf')
+            ) OR EXISTS (
+                SELECT 1 FROM leave_requests 
+                WHERE employee_id = v_emp_id AND v_date BETWEEN start_date AND end_date AND status = 'Approved' 
+                  AND leave_half_type IN ('FirstHalf', 'SecondHalf')
+            ) THEN
+                DELETE FROM attendance WHERE employee_id = v_emp_id AND date = v_date AND shift_type = 'FullDay';
+
+                INSERT INTO attendance
+                    (employee_id, date, first_in_time, last_out_time, worked_mins, shift_type, status, deduction_days)
+                VALUES
+                    (v_emp_id, v_date, v_first_in, v_last_out, ROUND(v_worked_mins / 2), 'FirstHalf', 'Absent', 0.50),
+                    (v_emp_id, v_date, v_first_in, v_last_out, ROUND(v_worked_mins / 2), 'SecondHalf', 'Absent', 0.50);
+            END IF;
+        END IF;
+
         UPDATE attendance a
         JOIN attendance_regularization r
           ON a.employee_id = r.employee_id AND a.date = r.date
